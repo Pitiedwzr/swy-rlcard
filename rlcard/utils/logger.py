@@ -22,7 +22,7 @@ class Logger(object):
             os.makedirs(self.log_dir)
 
         self.txt_file = open(self.txt_path, 'w')
-        self.csv_file = open(self.csv_path, 'w')
+        self.csv_file = open(self.csv_path, 'w', newline='')
         fieldnames = ['episode', 'reward']
         self.writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
         self.writer.writeheader()

@@ -26,7 +26,7 @@ from torch import nn
 
 from .file_writer import FileWriter
 from tensorboardX import SummaryWriter
-from .model import DMCModel
+from .model import DMCModel, _normalize_device
 from .pettingzoo_model import DMCModelPettingZoo
 from .utils import (
     get_batch,
@@ -62,18 +62,25 @@ def learn(
     lock
 ):
     """Performs a learning (optimization) step."""
-    device = "cuda:"+str(training_device) if training_device != "cpu" else "cpu"
+    device = _normalize_device(training_device)
     state = torch.flatten(batch['state'].to(device), 0, 1).float()
     action = torch.flatten(batch['action'].to(device), 0, 1).float()
     target = torch.flatten(batch['target'].to(device), 0, 1)
     episode_returns = batch['episode_return'][batch['done']]
-    mean_episode_return_buf[position].append(torch.mean(episode_returns).to(device))
 
     with lock:
+        if episode_returns.numel() > 0:
+            mean_episode_return_buf[position].append(torch.mean(episode_returns).to(device))
+        mean_return = (
+            torch.mean(torch.stack(list(mean_episode_return_buf[position]))).item()
+            if mean_episode_return_buf[position]
+            else 0.0
+        )
+
         values = agent.forward(state, action)
         loss = compute_loss(values, target)
         stats = {
-            'mean_episode_return_'+str(position): torch.mean(torch.stack([_r for _r in mean_episode_return_buf[position]])).item(),
+            'mean_episode_return_'+str(position): mean_return,
             'loss_'+str(position): loss.item(),
         }
 
@@ -81,7 +88,8 @@ def learn(
         loss.backward()
         nn.utils.clip_grad_norm_(agent.parameters(), max_grad_norm)
         optimizer.step()
-        scheduler.step()
+        if scheduler.last_epoch < scheduler.total_steps:
+            scheduler.step()
 
         for actor_model in actor_models.values():
             actor_model.get_agent(position).load_state_dict(agent.state_dict())
@@ -269,13 +277,14 @@ class DMCTrainer:
         for p in range(self.num_players):
             stat_keys.append('mean_episode_return_'+str(p))
             stat_keys.append('loss_'+str(p))
-        frames, iterations, stats = 0, [0, 0], {k: 0 for k in stat_keys}
+        frames, iterations, stats = 0, [0 for _ in range(self.num_players)], {k: 0 for k in stat_keys}
 
         # Load models if any
         if self.load_model and os.path.exists(self.checkpointpath):
             checkpoint_states = torch.load(
                     self.checkpointpath,
-                    map_location="cuda:"+str(self.training_device) if self.training_device != "cpu" else "cpu"
+                    map_location=_normalize_device(self.training_device),
+                    weights_only=False,
             )
             for p in range(self.num_players):
                 learner_model.get_agent(p).load_state_dict(checkpoint_states["model_state_dict"][p])
@@ -285,7 +294,11 @@ class DMCTrainer:
                     models[device].get_agent(p).load_state_dict(learner_model.get_agent(p).state_dict())
             stats = checkpoint_states["stats"]
             frames = checkpoint_states["frames"]
-            iterations = checkpoint_states["iterations"]
+            loaded_iterations = checkpoint_states["iterations"]
+            if isinstance(loaded_iterations, int):
+                iterations = [loaded_iterations for _ in range(self.num_players)]
+            else:
+                iterations = list(loaded_iterations)
             log.info(f"Resuming preempted job, current stats:\n{stats}")
             
 #         ###### for debugging
@@ -300,7 +313,9 @@ class DMCTrainer:
             for i in range(self.num_actors):
                 actor = ctx.Process(
                     target=act_pettingzoo if self.is_pettingzoo_env else act,
-                    args=(i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env))
+                    args=(i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env),
+                    daemon=True,
+                )
                 actor.start()
                 actor_processes.append(actor)
 
@@ -440,6 +455,12 @@ class DMCTrainer:
             for thread in threads:
                 thread.join()
             log.info('Learning finished after %d frames.', frames)
-
-        checkpoint(frames, self.total_iterations)
-        self.plogger.close()
+            checkpoint(frames, self.total_iterations)
+        finally:
+            for actor in actor_processes:
+                if actor.is_alive():
+                    actor.terminate()
+            for actor in actor_processes:
+                actor.join(timeout=5)
+            self.summary_writer.close()
+            self.plogger.close()

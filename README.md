@@ -1,8 +1,16 @@
 # 食物语“摆龙门”游戏AI代打
 
-![Python 3.6.9](https://img.shields.io/badge/Python-3.6.9-brightgreen?style=plastic) ![PyTorch 1.10.0](https://img.shields.io/badge/PyTorch-1.10.0-brightgreen?style=plastic) ![CUDA 10.2](https://img.shields.io/badge/CUDA-10.2-brightgreen?style=plastic)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen?style=plastic) ![PyTorch 2.6+](https://img.shields.io/badge/PyTorch-2.6%2B-brightgreen?style=plastic)
 
 本程序改编自[RLCard](https://rlcard.org)框架。有关代码结构、版本依赖等详细信息请参考他们的[官方源代码](https://github.com/datamllab/rlcard)。
+
+### 环境安装
+建议使用 Python 3.10 及以上版本（已在 Python 3.12 / 3.13 与 PyTorch 2.x 下测试通过）：
+```shell
+pip install -r requirements.txt
+# 或者使用 uv
+uv sync
+```
 
 ## 0. 免责声明
 

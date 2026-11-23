@@ -67,13 +67,13 @@ def act_pettingzoo(
                     size[agent_id] += traj_size
                     target_return = trajectories[agent_name][-2][1]
                     target_buf[agent_id].extend([target_return for _ in range(traj_size)])
-                    for i in range(0, len(trajectories[agent_name]), 2):
-                        state = trajectories[agent_name][i][0]['observation']
+                    for idx in range(0, len(trajectories[agent_name]), 2):
+                        state = trajectories[agent_name][idx][0]['observation']
                         action = _get_action_feature(
-                            trajectories[agent_name][i+1], model.agents[agent_name].action_shape
+                            trajectories[agent_name][idx+1], model.agents[agent_name].action_shape
                         )
-                        episode_return = trajectories[agent_name][i][1]
-                        done = trajectories[agent_name][i][2]
+                        episode_return = trajectories[agent_name][idx][1]
+                        done = trajectories[agent_name][idx][2]
                         state_buf[agent_id].append(torch.from_numpy(state))
                         action_buf[agent_id].append(torch.from_numpy(action))
                         episode_return_buf[agent_id].append(episode_return)

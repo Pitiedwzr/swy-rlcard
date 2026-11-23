@@ -23,10 +23,10 @@ def validate(env, agents, baseline_agent, M=1000):
         env.run(is_training=False)
         first_score[i] = env.game.final_score
     
-    res['first_avg_score'] = first_score[:, 0].mean()
-    res['first_avg_winning_score'] = (first_score[:, 0] - first_score[:, 1]).mean()
-    res['first_avg_winning_rate'] = (first_score[:, 0] > first_score[:, 1]).mean()
-    res['first_avg_losing_rate'] = (first_score[:, 0] < first_score[:, 1]).mean()
+    res['first_avg_score'] = float(first_score[:, 0].mean())
+    res['first_avg_winning_score'] = float((first_score[:, 0] - first_score[:, 1]).mean())
+    res['first_avg_winning_rate'] = float((first_score[:, 0] > first_score[:, 1]).mean())
+    res['first_avg_losing_rate'] = float((first_score[:, 0] < first_score[:, 1]).mean())
 
     # test second hand agent
     env.set_agents([baseline_agent, agents[1]])
@@ -34,11 +34,11 @@ def validate(env, agents, baseline_agent, M=1000):
     for i in range(M):
         env.run(is_training=False)
         second_score[i] = env.game.final_score
-    
-    res['second_avg_score'] = second_score[:, 1].mean()
-    res['second_avg_winning_score'] = (second_score[:, 1] - second_score[:, 0]).mean()
-    res['second_avg_winning_rate'] = (second_score[:, 1] > second_score[:, 0]).mean()
-    res['second_avg_losing_rate'] = (second_score[:, 1] < second_score[:, 0]).mean()
+
+    res['second_avg_score'] = float(second_score[:, 1].mean())
+    res['second_avg_winning_score'] = float((second_score[:, 1] - second_score[:, 0]).mean())
+    res['second_avg_winning_rate'] = float((second_score[:, 1] > second_score[:, 0]).mean())
+    res['second_avg_losing_rate'] = float((second_score[:, 1] < second_score[:, 0]).mean())
     
     return res
 
@@ -65,7 +65,7 @@ if __name__ == '__main__':
             ai_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
 
     # load trained ai agents
-    ckpt_states = torch.load(args.model_path, map_location=DEVICE)
+    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
     for p in range(env.num_players):
         ai_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
 

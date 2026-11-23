@@ -5,13 +5,14 @@ class RandomAgent(object):
     ''' A random agent. Random agents is for running toy examples on the card games
     '''
 
-    def __init__(self):
+    def __init__(self, num_actions=None):
         ''' Initilize the random agent
 
         Args:
             num_actions (int): The size of the ouput action space
         '''
         self.use_raw = False
+        self.num_actions = num_actions
 
     @staticmethod
     def step(state):

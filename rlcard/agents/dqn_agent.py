@@ -271,8 +271,8 @@ class Estimator(object):
 
         # initialize the weights using Xavier init
         for p in self.qnet.parameters():
-            if len(p.data.shape) > 1:
-                nn.init.xavier_uniform_(p.data)
+            if p.ndim > 1:
+                nn.init.xavier_uniform_(p)
 
         # set up loss function
         self.mse_loss = nn.MSELoss(reduction='mean')
@@ -356,7 +356,7 @@ class EstimatorNetwork(nn.Module):
         self.mlp_layers = mlp_layers
 
         # build the Q network
-        layer_dims = [np.prod(self.state_shape)] + self.mlp_layers
+        layer_dims = [int(np.prod(self.state_shape))] + self.mlp_layers
         fc = [nn.Flatten()]
         fc.append(nn.BatchNorm1d(layer_dims[0]))
         for i in range(len(layer_dims)-1):

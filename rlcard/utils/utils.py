@@ -2,15 +2,12 @@ import numpy as np
 
 def set_seed(seed):
     if seed is not None:
-        import subprocess
-        import sys
-
-        reqs = subprocess.check_output([sys.executable, '-m', 'pip', 'freeze'])
-        installed_packages = [r.decode().split('==')[0] for r in reqs.split()]
-        if 'torch' in installed_packages:
+        try:
             import torch
             torch.backends.cudnn.deterministic = True
             torch.manual_seed(seed)
+        except ImportError:
+            pass
         np.random.seed(seed)
         import random
         random.seed(seed)

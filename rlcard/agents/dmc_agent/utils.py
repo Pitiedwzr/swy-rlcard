@@ -148,9 +148,9 @@ def act(
                     episode_return_buf[p].append(float(payoffs[p]))
                     target_buf[p].extend([float(payoffs[p]) for _ in range(diff)])
                     # State and action
-                    for i in range(0, len(trajectories[p])-2, 2):
-                        state = trajectories[p][i]['obs']
-                        action = env.get_action_feature(trajectories[p][i+1])
+                    for idx in range(0, len(trajectories[p])-2, 2):
+                        state = trajectories[p][idx]['obs']
+                        action = env.get_action_feature(trajectories[p][idx+1])
                         state_buf[p].append(torch.from_numpy(state))
                         action_buf[p].append(torch.from_numpy(action))
                 

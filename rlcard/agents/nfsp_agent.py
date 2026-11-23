@@ -139,8 +139,8 @@ class NFSPAgent(object):
 
         # xavier init
         for p in self.policy_network.parameters():
-            if len(p.data.shape) > 1:
-                nn.init.xavier_uniform_(p.data)
+            if p.ndim > 1:
+                nn.init.xavier_uniform_(p)
 
         # configure optimizer
         self.policy_network_optimizer = torch.optim.Adam(self.policy_network.parameters(), lr=self._sl_learning_rate)
@@ -312,7 +312,7 @@ class AveragePolicyNetwork(nn.Module):
         self.mlp_layers = mlp_layers
 
         # set up mlp w/ relu activations
-        layer_dims = [np.prod(self.state_shape)] + self.mlp_layers
+        layer_dims = [int(np.prod(self.state_shape))] + self.mlp_layers
         mlp = [nn.Flatten()]
         mlp.append(nn.BatchNorm1d(layer_dims[0]))
         for i in range(len(layer_dims)-1):

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swy-rlcard"
+version = "1.1.0"
+description = "RLCard-based AI for Shiwuyu Bailongmen (食物语摆龙门)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.6.0",
+    "numpy>=1.26.0",
+    "tensorboardX>=2.6.2",
+    "gitpython>=3.1.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["rlcard*"]

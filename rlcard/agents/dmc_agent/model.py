@@ -18,6 +18,14 @@ import numpy as np
 import torch
 from torch import nn
 
+def _normalize_device(device):
+    if isinstance(device, torch.device):
+        return str(device)
+    device_str = str(device)
+    if device_str == "cpu" or device_str.startswith("cuda"):
+        return device_str
+    return f"cuda:{device_str}"
+
 class DMCNet(nn.Module):
     def __init__(
         self,
@@ -26,7 +34,7 @@ class DMCNet(nn.Module):
         mlp_layers=[512,512,512,512,512]
     ):
         super().__init__()
-        input_dim = np.prod(state_shape) + np.prod(action_shape)
+        input_dim = int(np.prod(state_shape) + np.prod(action_shape))
         layer_dims = [input_dim] + mlp_layers
         fc = []
         for i in range(len(layer_dims)-1):
@@ -52,7 +60,7 @@ class DMCAgent:
         device="0"
     ):
         self.use_raw = False
-        self.device = 'cuda:'+device if device != "cpu" else "cpu"
+        self.device = _normalize_device(device)
         self.net = DMCNet(state_shape, action_shape, mlp_layers).to(self.device)
         self.exp_epsilon = exp_epsilon
         self.action_shape = action_shape
@@ -104,10 +112,11 @@ class DMCAgent:
         obs = np.repeat(obs[np.newaxis, :], len(action_keys), axis=0)
 
         # Predict Q values
-        values = self.net.forward(torch.from_numpy(obs).to(self.device),
-                                  torch.from_numpy(action_values).to(self.device))
+        with torch.no_grad():
+            values = self.net.forward(torch.from_numpy(obs).to(self.device),
+                                      torch.from_numpy(action_values).to(self.device))
 
-        return action_keys, values.cpu().detach().numpy()
+        return action_keys, values.cpu().numpy()
 
     def forward(self, obs, actions):
         return self.net.forward(obs, actions)
@@ -119,7 +128,8 @@ class DMCAgent:
         return self.net.state_dict()
 
     def set_device(self, device):
-        self.device = device
+        self.device = _normalize_device(device)
+        self.net.to(self.device)
 
 class DMCModel:
     def __init__(

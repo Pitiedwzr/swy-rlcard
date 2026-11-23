@@ -137,7 +137,12 @@ def assist_game(env, agents):
     
     except Exception as e:
         # keyboard interrupt to jump in (e.g., for debugging)
-        import IPython; IPython.embed(); exit()
+        try:
+            import IPython
+            IPython.embed()
+            exit()
+        except ImportError:
+            raise e
 
 
 if __name__ == '__main__':
@@ -159,7 +164,7 @@ if __name__ == '__main__':
             ai_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
 
     # load trained ai agents
-    ckpt_states = torch.load(args.model_path, map_location=DEVICE)
+    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
     for p in range(env.num_players):
         ai_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
 

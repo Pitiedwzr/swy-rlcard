@@ -84,9 +84,9 @@ class FileWriter:
         self._logger = logging.getLogger('palaas/out')
 
         # to stdout handler
-        shandle = logging.StreamHandler()
-        shandle.setFormatter(formatter)
-        self._logger.addHandler(shandle)
+        self._shandle = logging.StreamHandler()
+        self._shandle.setFormatter(formatter)
+        self._logger.addHandler(self._shandle)
         self._logger.setLevel(logging.INFO)
 
         rootdir = os.path.expandvars(os.path.expanduser(rootdir))
@@ -128,16 +128,16 @@ class FileWriter:
             self._logger.warning('Path to message file already exists. '
                                  'New data will be appended.')
 
-        fhandle = logging.FileHandler(self.paths['msg'])
-        fhandle.setFormatter(formatter)
-        self._logger.addHandler(fhandle)
+        self._fhandle = logging.FileHandler(self.paths['msg'])
+        self._fhandle.setFormatter(formatter)
+        self._logger.addHandler(self._fhandle)
 
         self._logger.info('Saving logs data to %s', self.paths['logs'])
         self._logger.info('Saving logs\' fields to %s', self.paths['fields'])
         if os.path.exists(self.paths['logs']):
             self._logger.warning('Path to log file already exists. '
                                  'New data will be appended.')
-            with open(self.paths['fields'], 'r') as csvfile:
+            with open(self.paths['fields'], 'r', newline='') as csvfile:
                 reader = csv.reader(csvfile)
                 self.fieldnames = list(reader)[0]
         else:
@@ -157,21 +157,21 @@ class FileWriter:
             if k not in self.fieldnames:
                 self.fieldnames.append(k)
         if old_len != len(self.fieldnames):
-            with open(self.paths['fields'], 'w') as csvfile:
+            with open(self.paths['fields'], 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(self.fieldnames)
             self._logger.info('Updated log fields: %s', self.fieldnames)
 
         if to_log['_tick'] == 0:
             # print("\ncreating logs file ")
-            with open(self.paths['logs'], 'a') as f:
+            with open(self.paths['logs'], 'a', newline='') as f:
                 f.write('# %s\n' % ','.join(self.fieldnames))
 
         if verbose:
             self._logger.info('LOG | %s', ', '.join(
                 ['{}: {}'.format(k, to_log[k]) for k in sorted(to_log)]))
 
-        with open(self.paths['logs'], 'a') as f:
+        with open(self.paths['logs'], 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writerow(to_log)
             # print("\nadded to log file")
@@ -181,6 +181,9 @@ class FileWriter:
             '%Y-%m-%d %H:%M:%S.%f')
         self.metadata['successful'] = successful
         self._save_metadata()
+        for handler in (self._fhandle, self._shandle):
+            self._logger.removeHandler(handler)
+            handler.close()
 
     def _save_metadata(self) -> None:
         with open(self.paths['meta'], 'w') as jsonfile:
