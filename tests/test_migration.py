@@ -15,8 +15,11 @@ from rlcard.utils import reorganize, set_seed
 def test_env_and_agents_gameplay():
     set_seed(42)
     env = rlcard.make('swy-blm', config={'seed': 42})
-    assert env.state_shape == [[230], [230]]
+    assert env.state_shape == [[264], [264]]
     assert env.action_shape == [[44], [44]]
+
+    env_legacy = rlcard.make('swy-blm', config={'seed': 42, 'legacy_obs': True})
+    assert env_legacy.state_shape == [[230], [230]]
 
     env.set_agents([RuleBasedAgent(), RandomAgent()])
     for _ in range(10):
@@ -101,6 +104,8 @@ def test_dmc_trainer_train_resume_and_evaluate(tmp_path):
         num_threads=1,
         sync_interval=5,
         mlp_layers=[32, 32],
+        augment_symmetry=True,
+        aug_copies=2,
     )
     trainer.start()
 
