@@ -88,6 +88,7 @@ def test_dmc_trainer_train_resume_and_evaluate(tmp_path):
     trainer = DMCTrainer(
         env,
         cuda='',
+        actor_device='cpu',
         xpid='test_dmc',
         savedir=savedir,
         total_iterations=50,
@@ -96,8 +97,9 @@ def test_dmc_trainer_train_resume_and_evaluate(tmp_path):
         training_device='cpu',
         batch_size=4,
         unroll_length=6,
-        num_buffers=8,
-        num_threads=2,
+        num_buffers=16,
+        num_threads=1,
+        sync_interval=5,
         mlp_layers=[32, 32],
     )
     trainer.start()
@@ -172,9 +174,14 @@ def test_train_dmc_and_evaluate_cli_smoke(tmp_path):
             'train_dmc.py',
             '--env', 'swy-blm',
             '--xpid', 'cli_test',
+            '--actor_device', 'cpu',
             '--num_actor_devices', '1',
             '--num_actors', '2',
             '--training_device', 'cpu',
+            '--batch_size', '8',
+            '--num_buffers', '16',
+            '--num_threads', '1',
+            '--sync_interval', '5',
             '--savedir', savedir,
             '--total_iterations', '50',
         ],
@@ -186,18 +193,19 @@ def test_train_dmc_and_evaluate_cli_smoke(tmp_path):
     model_path = os.path.join(savedir, 'cli_test', 'model.tar')
     assert os.path.exists(model_path)
 
-    proc_eval = subprocess.run(
-        [
-            sys.executable,
-            'evaluate.py',
-            '--ai_agent', 'dmc',
-            '--model_path', model_path,
-            '--baseline_agent', 'rule-based',
-            '--total_simulations', '20',
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert proc_eval.returncode == 0, proc_eval.stderr
-    assert 'first_avg_score' in proc_eval.stdout
+    for agent_name in ('dmc', 'dmc_search'):
+        proc_eval = subprocess.run(
+            [
+                sys.executable,
+                'evaluate.py',
+                '--ai_agent', agent_name,
+                '--model_path', model_path,
+                '--baseline_agent', 'rule-based',
+                '--total_simulations', '20',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc_eval.returncode == 0, proc_eval.stderr
+        assert 'first_avg_score' in proc_eval.stdout
