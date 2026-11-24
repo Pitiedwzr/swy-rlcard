@@ -26,11 +26,11 @@ uv sync
 
 #### DMC (Deep Monte Carlo) Agents
 ```shell
-# Using 2 gpus (recommended)
-python3 train_dmc.py --env swy-blm --xpid <EXPERIMENT_ID> --cuda 0,1 --num_actor_devices 1 --training_device 1 --num_actors 8 --savedir <SAVE_DIR> --total_iterations 300000
+# Using GPU (recommended: CPU actors + GPU learner to avoid CUDA contention on small MLPs; adjust --num_actors to match CPU cores)
+python3 train_dmc.py --env swy-blm --xpid <EXPERIMENT_ID> --cuda 0 --training_device 0 --actor_device cpu --num_actors 4 --batch_size 64 --num_buffers 200 --num_threads 1 --sync_interval 10 --savedir <SAVE_DIR> --total_iterations 150000
 
 # Using cpu only
-python3 train_dmc.py --env swy-blm  --xpid <EXPERIMENT_ID> --num_actor_devices 1 --training_device 0 --num_actors 8 --savedir <SAVE_DIR> --total_iterations 2000000
+python3 train_dmc.py --env swy-blm --xpid <EXPERIMENT_ID> --num_actor_devices 1 --training_device 0 --num_actors 4 --savedir <SAVE_DIR> --total_iterations 1000000
 ```
 
 ### Evaluation
