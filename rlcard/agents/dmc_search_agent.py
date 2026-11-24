@@ -26,10 +26,10 @@ def _compute_scores_batch(card_vecs):
     return score
 
 
-def _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count):
+def _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count, obs_dim=230, cur_turn=None):
     """Vectorized equivalent of SwyBlmEnv._extract_state for (N, 22) binary vectors."""
     n = board_pub.shape[0]
-    obs = np.zeros((n, 230), dtype=np.float32)
+    obs = np.zeros((n, obs_dim), dtype=np.float32)
 
     obs[:, 0:22] = board_pub
     obs[:, 22:44] = cur_pub
@@ -72,14 +72,24 @@ def _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_pr
     for c in range(5):
         obs[idx, 205 + c * 5 + oppo_colors[:, c]] = 1.0
 
+    if obs_dim == 264:
+        seen = np.clip(board_pub + cur_pub + cur_priv + oppo_pub + cur_hand, 0.0, 1.0)
+        obs[:, 230:252] = 1.0 - seen
+        if cur_turn is not None and 0 <= int(cur_turn) < 12:
+            obs[:, 252 + int(cur_turn)] = 1.0
+
     return obs
 
 
 @torch.no_grad()
-def _batch_best_actions_and_values(dmc_agent, board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count):
+def _batch_best_actions_and_values(dmc_agent, board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count, cur_turn=None):
     """For N states, return best action_id (N,) and max Q value (N,)."""
     n = board_pub.shape[0]
-    obs = _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count)
+    obs_dim = int(dmc_agent.net.fc_layers[0].in_features) - 44
+    obs = _extract_obs_batch(
+        board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count,
+        obs_dim=obs_dim, cur_turn=cur_turn,
+    )
 
     can_priv = (cur_priv.sum(axis=1) < 3)
     can_pub = (cur_pub.sum(axis=1) < 3)
@@ -301,7 +311,7 @@ class DMCSearchAgent:
         else:
             oppo_acts, _ = _batch_best_actions_and_values(
                 oppo_agent, b_board, b_oppo_pub, b_oppo_priv, b_cur_pub, b_oppo_hand,
-                b_cur_priv.sum(axis=1).astype(np.int64),
+                b_cur_priv.sum(axis=1).astype(np.int64), cur_turn=t,
             )
         idx_arr = np.arange(total)
         oppo_cards = oppo_acts % 22
@@ -324,7 +334,7 @@ class DMCSearchAgent:
                     else:
                         acts, _ = _batch_best_actions_and_values(
                             my_agent, b_board, b_cur_pub, b_cur_priv, b_oppo_pub, b_cur_hand,
-                            b_oppo_priv.sum(axis=1).astype(np.int64),
+                            b_oppo_priv.sum(axis=1).astype(np.int64), cur_turn=t,
                         )
                     cards = acts % 22
                     b_cur_hand[idx_arr, cards] = 0.0
@@ -341,7 +351,7 @@ class DMCSearchAgent:
                     else:
                         acts, _ = _batch_best_actions_and_values(
                             oppo_agent, b_board, b_oppo_pub, b_oppo_priv, b_cur_pub, b_oppo_hand,
-                            b_cur_priv.sum(axis=1).astype(np.int64),
+                            b_cur_priv.sum(axis=1).astype(np.int64), cur_turn=t,
                         )
                     cards = acts % 22
                     b_oppo_hand[idx_arr, cards] = 0.0
@@ -364,7 +374,7 @@ class DMCSearchAgent:
             # Depth-2 Expectimax leaf evaluated by DMC value network
             _, leaf_vals = _batch_best_actions_and_values(
                 my_agent, b_board, b_cur_pub, b_cur_priv, b_oppo_pub, b_cur_hand,
-                b_oppo_priv.sum(axis=1).astype(np.int64),
+                b_oppo_priv.sum(axis=1).astype(np.int64), cur_turn=t,
             )
             diffs = leaf_vals
             utils = leaf_vals

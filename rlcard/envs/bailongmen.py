@@ -17,11 +17,12 @@ class SwyBlmEnv(Env):
     ''' Swy-blm Environment
     '''
 
-    def __init__(self, config):        
+    def __init__(self, config):
         self.name = 'swy-blm'
         self.game = SwyBlmGame()
         super().__init__(config)
-        self.state_shape = [[230], [230]]
+        self.legacy_obs = bool(config.get('legacy_obs', False))
+        self.state_shape = [[230], [230]] if self.legacy_obs else [[264], [264]]
         self.action_shape = [[44], [44]]
         
     def _extract_state(self, state):
@@ -64,10 +65,23 @@ class SwyBlmEnv(Env):
         for i in range(5):  # five different colors
             oppo_color_count[i*5: (i+1)*5] = one_hot(oppo_table[i, :].sum(), 5)
             
-        obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
-                              cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
-                              cur_joker_count, cur_suit_count, cur_color_count,
-                              oppo_joker_count, oppo_suit_count, oppo_color_count))
+        if self.legacy_obs:
+            obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
+                                  cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
+                                  cur_joker_count, cur_suit_count, cur_color_count,
+                                  oppo_joker_count, oppo_suit_count, oppo_color_count))
+        else:
+            seen_cards = np.clip(board_public + cur_public + cur_private + oppo_public + cur_hand, 0.0, 1.0)
+            unseen_cards = 1.0 - seen_cards
+            cur_turn = np.zeros(12)
+            turn_idx = int(state.get('cur_turn', -1))
+            if 0 <= turn_idx < 12:
+                cur_turn[turn_idx] = 1.0
+            obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
+                                  cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
+                                  cur_joker_count, cur_suit_count, cur_color_count,
+                                  oppo_joker_count, oppo_suit_count, oppo_color_count,
+                                  unseen_cards, cur_turn))
         
         # encode legal actions
         raw_legal_actions = self._get_legal_actions(state)

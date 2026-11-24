@@ -29,8 +29,12 @@ def _you_code(you):
         
 if __name__ == "__main__":
 
+    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
+    first_weight = ckpt_states['model_state_dict'][0].get('fc_layers.0.weight')
+    legacy_obs = (first_weight is not None and int(first_weight.shape[1]) == 274)
+
     ## Make environment
-    env = rlcard.make('swy-blm')
+    env = rlcard.make('swy-blm', config={'legacy_obs': legacy_obs})
 
     ## Prepare agents
     if args.ai_agent == 'dmc':
@@ -39,7 +43,6 @@ if __name__ == "__main__":
             ai_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
 
     # load trained ai agents
-    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
     for p in range(env.num_players):
         ai_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
 
