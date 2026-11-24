@@ -74,7 +74,7 @@ Demo example (AI agent helps online gaming):
 
 ### 状态特征空间
 
-某一个回合的状态特征由以下几部分观测信息组成：系统初始公有牌(board_public)、己方公有牌(cur_public)、己方私有牌(cur_private)、对方公有牌(oppo_public)、己方手牌(cur_hand)、己方剩余公有空间(cur_public_space)、己方剩余私有空间(cur_private_space)、对方剩余公有空间(oppo_public_space)、对方剩余私有空间(oppo_private_space)。除了以上必备信息外，我们又设计了以下特征来帮助学习：己方各花色数量(cur_suit_count, cur_joker_count)、己方各颜色数量(cur_color_count)、对方各花色数量(oppo_suit_count, oppo_joker_count)、对方各颜色数量(oppo_color_count)。由于本游戏的状态相对离散，我们 one-hot 编码了以上这些特征。最终状态特征为230维。
+某一个回合的状态特征由以下几部分观测信息组成：系统初始公有牌(board_public)、己方公有牌(cur_public)、己方私有牌(cur_private)、对方公有牌(oppo_public)、己方手牌(cur_hand)、己方剩余公有空间(cur_public_space)、己方剩余私有空间(cur_private_space)、对方剩余公有空间(oppo_public_space)、对方剩余私有空间(oppo_private_space)。除了以上必备信息外，我们又设计了以下特征来帮助学习：己方各花色数量(cur_suit_count, cur_joker_count)、己方各颜色数量(cur_color_count)、对方各花色数量(oppo_suit_count, oppo_joker_count)、对方各颜色数量(oppo_color_count)。由于本游戏的状态相对离散，我们 one-hot 编码了以上这些特征，并额外加入了**未见牌掩码(22维)**与**当前回合(12维)**特征。最终状态特征为264维（评估脚本自动兼容旧版230维权重）；训练时还内置了花色/颜色/大小王共576倍等价对称性数据增强以加速收敛。
 
 ### 动作特征空间
 
