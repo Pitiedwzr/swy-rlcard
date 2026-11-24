@@ -84,13 +84,11 @@ def act_pettingzoo(
                     if index is None:
                         print("index is None")
                         break
-                    for t in range(T):
-                        temp_done = done_buf[agent_id][t]
-                        buffers[agent_id]['done'][index][t, ...] = temp_done
-                        buffers[agent_id]['episode_return'][index][t, ...] = episode_return_buf[agent_id][t]
-                        buffers[agent_id]['target'][index][t, ...] = target_buf[agent_id][t]
-                        buffers[agent_id]['state'][index][t, ...] = state_buf[agent_id][t]
-                        buffers[agent_id]['action'][index][t, ...] = action_buf[agent_id][t]
+                    buffers[agent_id]['done'][index].copy_(torch.as_tensor(done_buf[agent_id][:T], dtype=torch.bool))
+                    buffers[agent_id]['episode_return'][index].copy_(torch.as_tensor(episode_return_buf[agent_id][:T], dtype=torch.float32))
+                    buffers[agent_id]['target'][index].copy_(torch.as_tensor(target_buf[agent_id][:T], dtype=torch.float32))
+                    buffers[agent_id]['state'][index].copy_(torch.stack(state_buf[agent_id][:T]))
+                    buffers[agent_id]['action'][index].copy_(torch.stack(action_buf[agent_id][:T]))
                     full_queue[agent_id].put(index)
                     done_buf[agent_id] = done_buf[agent_id][T:]
                     episode_return_buf[agent_id] = episode_return_buf[agent_id][T:]

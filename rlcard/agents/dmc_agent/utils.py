@@ -158,12 +158,11 @@ def act(
                     index = free_queue[p].get()
                     if index is None:
                         break
-                    for t in range(T):
-                        buffers[p]['done'][index][t, ...] = done_buf[p][t]
-                        buffers[p]['episode_return'][index][t, ...] = episode_return_buf[p][t]
-                        buffers[p]['target'][index][t, ...] = target_buf[p][t]
-                        buffers[p]['state'][index][t, ...] = state_buf[p][t]
-                        buffers[p]['action'][index][t, ...] = action_buf[p][t]
+                    buffers[p]['done'][index].copy_(torch.as_tensor(done_buf[p][:T], dtype=torch.bool))
+                    buffers[p]['episode_return'][index].copy_(torch.as_tensor(episode_return_buf[p][:T], dtype=torch.float32))
+                    buffers[p]['target'][index].copy_(torch.as_tensor(target_buf[p][:T], dtype=torch.float32))
+                    buffers[p]['state'][index].copy_(torch.stack(state_buf[p][:T]))
+                    buffers[p]['action'][index].copy_(torch.stack(action_buf[p][:T]))
                     full_queue[p].put(index)
                     done_buf[p] = done_buf[p][T:]
                     episode_return_buf[p] = episode_return_buf[p][T:]
