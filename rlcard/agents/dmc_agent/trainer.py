@@ -59,13 +59,14 @@ def learn(
     training_device,
     max_grad_norm,
     mean_episode_return_buf,
-    lock
+    lock,
+    sync_weights=True,
 ):
     """Performs a learning (optimization) step."""
     device = _normalize_device(training_device)
-    state = torch.flatten(batch['state'].to(device), 0, 1).float()
-    action = torch.flatten(batch['action'].to(device), 0, 1).float()
-    target = torch.flatten(batch['target'].to(device), 0, 1)
+    state = torch.flatten(batch['state'].to(device, non_blocking=True), 0, 1).float()
+    action = torch.flatten(batch['action'].to(device, non_blocking=True), 0, 1).float()
+    target = torch.flatten(batch['target'].to(device, non_blocking=True), 0, 1)
     episode_returns = batch['episode_return'][batch['done']]
 
     with lock:
@@ -91,8 +92,17 @@ def learn(
         if scheduler.last_epoch < scheduler.total_steps:
             scheduler.step()
 
-        for actor_model in actor_models.values():
-            actor_model.get_agent(position).load_state_dict(agent.state_dict())
+        if sync_weights:
+            src_state_dict = agent.state_dict()
+            cpu_state_dict = None
+            for actor_model in actor_models.values():
+                target_agent = actor_model.get_agent(position)
+                if target_agent.device == "cpu" and str(agent.device) != "cpu":
+                    if cpu_state_dict is None:
+                        cpu_state_dict = {k: v.detach().to("cpu") for k, v in src_state_dict.items()}
+                    target_agent.load_state_dict(cpu_state_dict)
+                else:
+                    target_agent.load_state_dict(src_state_dict)
         return stats
 
 
@@ -125,6 +135,7 @@ class DMCTrainer:
         self,
         env,
         cuda="",
+        actor_device=None,
         is_pettingzoo_env=False,
         load_model=False,
         xpid='dmc',
@@ -138,8 +149,9 @@ class DMCTrainer:
         exp_epsilon=0.01,
         batch_size=32,
         unroll_length=100,
-        num_buffers=50,
-        num_threads=4,
+        num_buffers=100,
+        num_threads=1,
+        sync_interval=1,
         max_grad_norm=40,
         learning_rate=0.0001,
         alpha=0.99,
@@ -173,6 +185,7 @@ class DMCTrainer:
         self.exp_epsilon = exp_epsilon
         self.num_buffers = num_buffers
         self.num_threads = num_threads
+        self.sync_interval = max(1, int(sync_interval))
         self.max_grad_norm = max_grad_norm
         self.learning_rate =learning_rate
         self.alpha = alpha
@@ -208,11 +221,15 @@ class DMCTrainer:
 
         self.mean_episode_return_buf = [deque(maxlen=100) for _ in range(self.num_players)]
 
+        self.actor_device = actor_device
         if cuda == "": # Use CPU
             self.device_iterator = ['cpu']
             self.training_device = "cpu"
         else:
-            self.device_iterator = range(num_actor_devices)
+            if actor_device == "cpu":
+                self.device_iterator = ['cpu']
+            else:
+                self.device_iterator = range(num_actor_devices)
 
     def start(self):
         # Initialize actor models
@@ -307,6 +324,16 @@ class DMCTrainer:
 #             act(i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env)
 #         ###### for debugging
 
+        # Initial sync so actor models match learner_model before starting
+        for p in range(self.num_players):
+            src_state_dict = learner_model.get_agent(p).state_dict()
+            for device in self.device_iterator:
+                target_agent = models[device].get_agent(p)
+                if target_agent.device == "cpu" and str(learner_model.get_agent(p).device) != "cpu":
+                    target_agent.load_state_dict({k: v.detach().to("cpu") for k, v in src_state_dict.items()})
+                else:
+                    target_agent.load_state_dict(src_state_dict)
+
         # Starting actor processes
         for device in self.device_iterator:
             num_actors = self.num_actors
@@ -346,6 +373,7 @@ class DMCTrainer:
             nonlocal frames, stats, iterations
             
             #while frames < self.total_frames:
+            local_step = 0
             while iterations[position] < self.total_iterations :
                 batch = get_batch(
                     free_queue[device][position],
@@ -354,6 +382,8 @@ class DMCTrainer:
                     self.B,
                     local_lock
                 )
+                local_step += 1
+                sync_weights = (local_step % self.sync_interval == 0)
                 _stats = learn(
                     position,
                     models,
@@ -364,7 +394,8 @@ class DMCTrainer:
                     self.training_device,
                     self.max_grad_norm,
                     self.mean_episode_return_buf,
-                    position_lock
+                    position_lock,
+                    sync_weights=sync_weights,
                 )
 
                 with lock:
