@@ -28,6 +28,7 @@ from .file_writer import FileWriter
 from tensorboardX import SummaryWriter
 from .model import DMCModel, _normalize_device
 from .pettingzoo_model import DMCModelPettingZoo
+from .symmetry import build_swy_blm_symmetry_tables
 from .utils import (
     get_batch,
     create_buffers,
@@ -61,6 +62,8 @@ def learn(
     mean_episode_return_buf,
     lock,
     sync_weights=True,
+    symmetry_tables=None,
+    aug_copies=1,
 ):
     """Performs a learning (optimization) step."""
     device = _normalize_device(training_device)
@@ -68,6 +71,24 @@ def learn(
     action = torch.flatten(batch['action'].to(device, non_blocking=True), 0, 1).float()
     target = torch.flatten(batch['target'].to(device, non_blocking=True), 0, 1)
     episode_returns = batch['episode_return'][batch['done']]
+
+    if symmetry_tables is not None:
+        obs_perms, act_perms = symmetry_tables
+        n = state.shape[0]
+        if aug_copies <= 1:
+            sym_idx = torch.randint(0, obs_perms.shape[0], (n,), device=state.device)
+            state = torch.gather(state, 1, obs_perms[sym_idx])
+            action = torch.gather(action, 1, act_perms[sym_idx])
+        else:
+            aug_states = [state]
+            aug_actions = [action]
+            for _ in range(aug_copies - 1):
+                sym_idx = torch.randint(0, obs_perms.shape[0], (n,), device=state.device)
+                aug_states.append(torch.gather(state, 1, obs_perms[sym_idx]))
+                aug_actions.append(torch.gather(action, 1, act_perms[sym_idx]))
+            state = torch.cat(aug_states, dim=0)
+            action = torch.cat(aug_actions, dim=0)
+            target = target.repeat(aug_copies)
 
     with lock:
         if episode_returns.numel() > 0:
@@ -157,7 +178,9 @@ class DMCTrainer:
         alpha=0.99,
         momentum=0,
         epsilon=0.00001,
-        mlp_layers=[512,512,512,512,512]
+        mlp_layers=[512,512,512,512,512],
+        augment_symmetry=None,
+        aug_copies=1,
     ):
         self.env = env
 
@@ -231,6 +254,12 @@ class DMCTrainer:
             else:
                 self.device_iterator = range(num_actor_devices)
 
+        if augment_symmetry is None:
+            self.augment_symmetry = (not self.is_pettingzoo_env and getattr(self.env, 'name', None) == 'swy-blm')
+        else:
+            self.augment_symmetry = bool(augment_symmetry)
+        self.aug_copies = max(1, int(aug_copies))
+
     def start(self):
         # Initialize actor models
         
@@ -271,6 +300,14 @@ class DMCTrainer:
         
         # Learner model for training
         learner_model = self.model_func(self.training_device)
+
+        # Build symmetry augmentation tables on training device if enabled
+        symmetry_tables = None
+        if self.augment_symmetry and getattr(self.env, 'name', None) == 'swy-blm':
+            obs_dim = int(self.env.state_shape[0][0])
+            obs_perms, act_perms = build_swy_blm_symmetry_tables(obs_dim=obs_dim)
+            train_dev = _normalize_device(self.training_device)
+            symmetry_tables = (obs_perms.to(train_dev), act_perms.to(train_dev))
 
         # Create optimizers
         optimizers = create_optimizers(
@@ -396,6 +433,8 @@ class DMCTrainer:
                     self.mean_episode_return_buf,
                     position_lock,
                     sync_weights=sync_weights,
+                    symmetry_tables=symmetry_tables,
+                    aug_copies=self.aug_copies,
                 )
 
                 with lock:

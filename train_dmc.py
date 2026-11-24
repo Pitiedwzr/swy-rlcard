@@ -11,7 +11,8 @@ from rlcard.agents.dmc_agent import DMCTrainer
 def train(args):
 
     # Make the environment
-    env = rlcard.make(args.env)
+    env_config = {'legacy_obs': args.legacy_obs} if args.env == 'swy-blm' else {}
+    env = rlcard.make(args.env, config=env_config)
 
     # Initialize the DMC trainer
     trainer = DMCTrainer(
@@ -33,7 +34,9 @@ def train(args):
         num_buffers=args.num_buffers,
         num_threads=args.num_threads,
         sync_interval=args.sync_interval,
-        mlp_layers=[256,256,256,128]
+        mlp_layers=[256,256,256,128],
+        augment_symmetry=not args.no_augment,
+        aug_copies=args.aug_copies,
     )
 
     # Train DMC Agents
@@ -154,6 +157,22 @@ if __name__ == '__main__':
         default=0.01,
         type=float,
         help='Epsilon-greedy exploration rate during actor simulation',
+    )
+    parser.add_argument(
+        '--no_augment',
+        action='store_true',
+        help='Disable suit/color symmetry augmentation during training',
+    )
+    parser.add_argument(
+        '--aug_copies',
+        default=2,
+        type=int,
+        help='Number of symmetry-augmented copies per batch (swy-blm)',
+    )
+    parser.add_argument(
+        '--legacy_obs',
+        action='store_true',
+        help='Use legacy 230-dim state representation for swy-blm',
     )
 
     args = parser.parse_args()
