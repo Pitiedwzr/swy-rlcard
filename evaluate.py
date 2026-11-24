@@ -8,6 +8,7 @@ import torch
 
 import rlcard
 from rlcard.agents.dmc_agent.model import DMCAgent
+from rlcard.agents.dmc_search_agent import DMCSearchAgent
 from rlcard.agents.random_agent import RandomAgent
 from rlcard.agents.rule_based_agent import RuleBasedAgent
 
@@ -59,15 +60,22 @@ if __name__ == '__main__':
     env = rlcard.make('swy-blm')
     
     ## Prepare agents
-    if args.ai_agent == 'dmc':
-        ai_agents = []
+    if args.ai_agent in ('dmc', 'dmc_search'):
+        base_agents = []
         for p in range(env.num_players):
-            ai_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
+            base_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
 
-    # load trained ai agents
-    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
-    for p in range(env.num_players):
-        ai_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
+        # load trained ai agents
+        ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
+        for p in range(env.num_players):
+            base_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
+
+        if args.ai_agent == 'dmc_search':
+            ai_agents = [DMCSearchAgent(base_agents, p) for p in range(env.num_players)]
+        else:
+            ai_agents = base_agents
+    else:
+        raise NotImplementedError(f"Unsupported ai_agent: {args.ai_agent}")
 
     print("AI model version: {} at {}".format(ai_agents[0].__class__, args.model_path))
     
