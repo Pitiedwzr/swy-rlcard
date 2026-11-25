@@ -22,6 +22,7 @@ class SwyBlmEnv(Env):
         self.game = SwyBlmGame()
         super().__init__(config)
         self.legacy_obs = bool(config.get('legacy_obs', False))
+        self.win_reward_weight = float(config.get('win_reward_weight', 0.0))
         self.state_shape = [[230], [230]] if self.legacy_obs else [[264], [264]]
         self.action_shape = [[44], [44]]
         
@@ -99,8 +100,9 @@ class SwyBlmEnv(Env):
         Returns:
             payoffs (list): a list of payoffs for each player
         '''
-        score_diff = self.game.final_score[0] - self.game.final_score[1]     
-        return np.array([score_diff, -score_diff], dtype=np.float32)
+        score_diff = float(self.game.final_score[0] - self.game.final_score[1])
+        reward = self.win_reward_weight * float(np.sign(score_diff)) + score_diff
+        return np.array([reward, -reward], dtype=np.float32)
 
     def _decode_action(self, action_id):
         ''' Action id -> the action in the game. Must be implemented in the child class.
