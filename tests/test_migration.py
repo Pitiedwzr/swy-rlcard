@@ -18,8 +18,13 @@ def test_env_and_agents_gameplay():
     assert env.state_shape == [[264], [264]]
     assert env.action_shape == [[44], [44]]
 
-    env_legacy = rlcard.make('swy-blm', config={'seed': 42, 'legacy_obs': True})
+    env_legacy = rlcard.make('swy-blm', config={'seed': 42, 'legacy_obs': True, 'win_reward_weight': 5.0})
     assert env_legacy.state_shape == [[230], [230]]
+    env_legacy.set_agents([RuleBasedAgent(), RandomAgent()])
+    _, shaped_payoffs = env_legacy.run(is_training=False)
+    assert np.isclose(shaped_payoffs[0] + shaped_payoffs[1], 0.0)
+    score_diff = env_legacy.game.final_score[0] - env_legacy.game.final_score[1]
+    assert np.isclose(shaped_payoffs[0], 5.0 * np.sign(score_diff) + score_diff)
 
     env.set_agents([RuleBasedAgent(), RandomAgent()])
     for _ in range(10):
@@ -106,6 +111,12 @@ def test_dmc_trainer_train_resume_and_evaluate(tmp_path):
         mlp_layers=[32, 32],
         augment_symmetry=True,
         aug_copies=2,
+        loss_type='smooth_l1',
+        loss_beta=2.0,
+        snapshot_prob=0.15,
+        rule_opponent_prob=0.15,
+        snapshot_pool_size=2,
+        snapshot_interval=10,
     )
     trainer.start()
 
