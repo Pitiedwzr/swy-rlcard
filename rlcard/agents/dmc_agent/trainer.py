@@ -46,7 +46,9 @@ from rlcard.agents.random_agent import RandomAgent
 from rlcard.agents.rule_based_agent import RuleBasedAgent
 from evaluate import validate
 
-def compute_loss(logits, targets):
+def compute_loss(logits, targets, loss_type='mse', loss_beta=2.0):
+    if loss_type == 'smooth_l1':
+        return torch.nn.functional.smooth_l1_loss(logits, targets, beta=loss_beta)
     loss = ((logits - targets)**2).mean()
     return loss
 
@@ -64,6 +66,9 @@ def learn(
     sync_weights=True,
     symmetry_tables=None,
     aug_copies=1,
+    loss_type='mse',
+    loss_beta=2.0,
+    snapshot_target=None,
 ):
     """Performs a learning (optimization) step."""
     device = _normalize_device(training_device)
@@ -100,7 +105,7 @@ def learn(
         )
 
         values = agent.forward(state, action)
-        loss = compute_loss(values, target)
+        loss = compute_loss(values, target, loss_type=loss_type, loss_beta=loss_beta)
         stats = {
             'mean_episode_return_'+str(position): mean_return,
             'loss_'+str(position): loss.item(),
@@ -113,17 +118,25 @@ def learn(
         if scheduler.last_epoch < scheduler.total_steps:
             scheduler.step()
 
-        if sync_weights:
+        if sync_weights or snapshot_target is not None:
             src_state_dict = agent.state_dict()
             cpu_state_dict = None
-            for actor_model in actor_models.values():
-                target_agent = actor_model.get_agent(position)
-                if target_agent.device == "cpu" and str(agent.device) != "cpu":
+            if sync_weights:
+                for actor_model in actor_models.values():
+                    target_agent = actor_model.get_agent(position)
+                    if target_agent.device == "cpu" and str(agent.device) != "cpu":
+                        if cpu_state_dict is None:
+                            cpu_state_dict = {k: v.detach().to("cpu") for k, v in src_state_dict.items()}
+                        target_agent.load_state_dict(cpu_state_dict)
+                    else:
+                        target_agent.load_state_dict(src_state_dict)
+            if snapshot_target is not None:
+                if snapshot_target.device == "cpu" and str(agent.device) != "cpu":
                     if cpu_state_dict is None:
                         cpu_state_dict = {k: v.detach().to("cpu") for k, v in src_state_dict.items()}
-                    target_agent.load_state_dict(cpu_state_dict)
+                    snapshot_target.load_state_dict(cpu_state_dict)
                 else:
-                    target_agent.load_state_dict(src_state_dict)
+                    snapshot_target.load_state_dict(src_state_dict)
         return stats
 
 
@@ -181,6 +194,12 @@ class DMCTrainer:
         mlp_layers=[512,512,512,512,512],
         augment_symmetry=None,
         aug_copies=1,
+        loss_type='mse',
+        loss_beta=2.0,
+        snapshot_prob=0.0,
+        rule_opponent_prob=0.0,
+        snapshot_pool_size=8,
+        snapshot_interval=1000,
     ):
         self.env = env
 
@@ -259,6 +278,14 @@ class DMCTrainer:
         else:
             self.augment_symmetry = bool(augment_symmetry)
         self.aug_copies = max(1, int(aug_copies))
+        self.loss_type = loss_type
+        self.loss_beta = float(loss_beta)
+        self.snapshot_prob = max(0.0, float(snapshot_prob))
+        self.rule_opponent_prob = max(0.0, float(rule_opponent_prob))
+        if self.is_pettingzoo_env or getattr(self.env, 'name', None) != 'swy-blm':
+            self.rule_opponent_prob = 0.0
+        self.snapshot_pool_size = max(1, int(snapshot_pool_size))
+        self.snapshot_interval = max(1, int(snapshot_interval))
 
     def start(self):
         # Initialize actor models
@@ -361,6 +388,17 @@ class DMCTrainer:
 #             act(i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env)
 #         ###### for debugging
 
+        # Initialize shared historical snapshot pool on CPU if enabled
+        snapshot_models = []
+        num_snapshots_ready = ctx.Value('i', 0)
+        snapshot_writes = [0 for _ in range(self.num_players)]
+        if not self.is_pettingzoo_env and self.snapshot_prob > 0:
+            for _ in range(self.snapshot_pool_size):
+                snap = self.model_func('cpu')
+                snap.share_memory()
+                snap.eval()
+                snapshot_models.append(snap)
+
         # Initial sync so actor models match learner_model before starting
         for p in range(self.num_players):
             src_state_dict = learner_model.get_agent(p).state_dict()
@@ -375,9 +413,17 @@ class DMCTrainer:
         for device in self.device_iterator:
             num_actors = self.num_actors
             for i in range(self.num_actors):
+                actor_args = (
+                    (i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env)
+                    if self.is_pettingzoo_env
+                    else (
+                        i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env,
+                        snapshot_models, num_snapshots_ready, self.snapshot_prob, self.rule_opponent_prob
+                    )
+                )
                 actor = ctx.Process(
                     target=act_pettingzoo if self.is_pettingzoo_env else act,
-                    args=(i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env),
+                    args=actor_args,
                     daemon=True,
                 )
                 actor.start()
@@ -421,6 +467,12 @@ class DMCTrainer:
                 )
                 local_step += 1
                 sync_weights = (local_step % self.sync_interval == 0)
+                snapshot_target = None
+                wrote_snapshot = False
+                if snapshot_models and (local_step % self.snapshot_interval == 0):
+                    slot = snapshot_writes[position] % self.snapshot_pool_size
+                    snapshot_target = snapshot_models[slot].get_agent(position)
+                    wrote_snapshot = True
                 _stats = learn(
                     position,
                     models,
@@ -435,9 +487,15 @@ class DMCTrainer:
                     sync_weights=sync_weights,
                     symmetry_tables=symmetry_tables,
                     aug_copies=self.aug_copies,
+                    loss_type=self.loss_type,
+                    loss_beta=self.loss_beta,
+                    snapshot_target=snapshot_target,
                 )
 
                 with lock:
+                    if wrote_snapshot:
+                        snapshot_writes[position] += 1
+                        num_snapshots_ready.value = min(self.snapshot_pool_size, min(snapshot_writes))
                     frames += self.T * self.B
                     iterations[position] += 1
                     #print("position={}, device={}, i={}, iterations={}".format(position, device, i, iterations))

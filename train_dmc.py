@@ -11,7 +11,11 @@ from rlcard.agents.dmc_agent import DMCTrainer
 def train(args):
 
     # Make the environment
-    env_config = {'legacy_obs': args.legacy_obs} if args.env == 'swy-blm' else {}
+    env_config = (
+        {'legacy_obs': args.legacy_obs, 'win_reward_weight': args.win_reward_weight}
+        if args.env == 'swy-blm'
+        else {}
+    )
     env = rlcard.make(args.env, config=env_config)
 
     # Initialize the DMC trainer
@@ -37,6 +41,12 @@ def train(args):
         mlp_layers=[256,256,256,128],
         augment_symmetry=not args.no_augment,
         aug_copies=args.aug_copies,
+        loss_type=args.loss_type,
+        loss_beta=args.loss_beta,
+        snapshot_prob=args.snapshot_prob,
+        rule_opponent_prob=args.rule_opponent_prob,
+        snapshot_pool_size=args.snapshot_pool_size,
+        snapshot_interval=args.snapshot_interval,
     )
 
     # Train DMC Agents
@@ -173,6 +183,48 @@ if __name__ == '__main__':
         '--legacy_obs',
         action='store_true',
         help='Use legacy 230-dim state representation for swy-blm',
+    )
+    parser.add_argument(
+        '--win_reward_weight',
+        default=5.0,
+        type=float,
+        help='Win/loss bonus weight added to score_diff in swy-blm payoffs (default: 5.0)',
+    )
+    parser.add_argument(
+        '--loss_type',
+        default='smooth_l1',
+        choices=['mse', 'smooth_l1'],
+        help='Regression loss type (default: smooth_l1)',
+    )
+    parser.add_argument(
+        '--loss_beta',
+        default=2.0,
+        type=float,
+        help='Beta parameter for smooth_l1 loss (default: 2.0)',
+    )
+    parser.add_argument(
+        '--snapshot_prob',
+        default=0.10,
+        type=float,
+        help='Fraction of actor games played against historical snapshots (default: 0.10)',
+    )
+    parser.add_argument(
+        '--rule_opponent_prob',
+        default=0.10,
+        type=float,
+        help='Fraction of actor games played against RuleBasedAgent on swy-blm (default: 0.10)',
+    )
+    parser.add_argument(
+        '--snapshot_pool_size',
+        default=8,
+        type=int,
+        help='Maximum number of historical snapshots kept in pool (default: 8)',
+    )
+    parser.add_argument(
+        '--snapshot_interval',
+        default=1000,
+        type=int,
+        help='Learner steps between saving a snapshot into the pool (default: 1000)',
     )
 
     args = parser.parse_args()

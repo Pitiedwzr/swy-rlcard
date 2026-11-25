@@ -120,14 +120,25 @@ def act(
     full_queue,
     model,
     buffers,
-    env
+    env,
+    snapshot_models=None,
+    num_snapshots_ready=None,
+    snapshot_prob=0.0,
+    rule_opponent_prob=0.0,
 ):
     try:
         log.info('Device %s Actor %i started.', str(device), i)
 
         # Configure environment
         env.seed(i)
-        env.set_agents(model.get_agents())
+        current_agents = model.get_agents()
+        env.set_agents(current_agents)
+
+        rng = np.random.default_rng(10000 + i)
+        rule_agent = None
+        if rule_opponent_prob > 0:
+            from rlcard.agents.rule_based_agent import RuleBasedAgent
+            rule_agent = RuleBasedAgent()
 
         done_buf = [[] for _ in range(env.num_players)]
         episode_return_buf = [[] for _ in range(env.num_players)]
@@ -137,8 +148,37 @@ def act(
         size = [0 for _ in range(env.num_players)]
 
         while True:
-            trajectories, payoffs = env.run(is_training=True)  # run a full games
-            for p in range(env.num_players):
+            train_players = range(env.num_players)
+            if rule_opponent_prob > 0 or snapshot_prob > 0:
+                r = float(rng.random())
+                if r < rule_opponent_prob and rule_agent is not None:
+                    train_p = int(rng.integers(0, env.num_players))
+                    agents = [
+                        current_agents[p] if p == train_p else rule_agent
+                        for p in range(env.num_players)
+                    ]
+                    env.set_agents(agents)
+                    train_players = (train_p,)
+                elif (
+                    r < rule_opponent_prob + snapshot_prob
+                    and snapshot_models
+                    and num_snapshots_ready is not None
+                    and num_snapshots_ready.value > 0
+                ):
+                    train_p = int(rng.integers(0, env.num_players))
+                    snap_idx = int(rng.integers(0, num_snapshots_ready.value))
+                    snap_agents = snapshot_models[snap_idx].get_agents()
+                    agents = [
+                        current_agents[p] if p == train_p else snap_agents[p]
+                        for p in range(env.num_players)
+                    ]
+                    env.set_agents(agents)
+                    train_players = (train_p,)
+                else:
+                    env.set_agents(current_agents)
+
+            trajectories, payoffs = env.run(is_training=True)  # run a full game
+            for p in train_players:
                 size[p] += len(trajectories[p][:-1]) // 2
                 diff = size[p] - len(target_buf[p])
                 if diff > 0:
