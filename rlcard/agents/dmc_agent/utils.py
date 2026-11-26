@@ -53,6 +53,7 @@ def create_buffers(
     state_shape,
     action_shape,
     device_iterator,
+    include_aux_targets=False,
 ):
     buffers = {}
     for device in device_iterator:
@@ -65,6 +66,9 @@ def create_buffers(
                 state=dict(size=(T,)+tuple(state_shape[player_id]), dtype=torch.int8),
                 action=dict(size=(T,)+tuple(action_shape[player_id]), dtype=torch.int8),
             )
+            if include_aux_targets:
+                specs['wdl_target'] = dict(size=(T,), dtype=torch.int64)
+                specs['oppo_priv'] = dict(size=(T, 22), dtype=torch.int8)
             _buffers = {key: [] for key in specs}
             for _ in range(num_buffers):
                 for key in _buffers:
@@ -125,6 +129,7 @@ def act(
     num_snapshots_ready=None,
     snapshot_prob=0.0,
     rule_opponent_prob=0.0,
+    include_aux_targets=False,
 ):
     try:
         log.info('Device %s Actor %i started.', str(device), i)
@@ -140,11 +145,16 @@ def act(
             from rlcard.agents.rule_based_agent import RuleBasedAgent
             rule_agent = RuleBasedAgent()
 
+        if include_aux_targets:
+            from rlcard.games.bailongmen.utils import _cards2array
+
         done_buf = [[] for _ in range(env.num_players)]
         episode_return_buf = [[] for _ in range(env.num_players)]
         target_buf = [[] for _ in range(env.num_players)]
         state_buf = [[] for _ in range(env.num_players)]
         action_buf = [[] for _ in range(env.num_players)]
+        wdl_target_buf = [[] for _ in range(env.num_players)]
+        oppo_priv_buf = [[] for _ in range(env.num_players)]
         size = [0 for _ in range(env.num_players)]
 
         while True:
@@ -178,21 +188,30 @@ def act(
                     env.set_agents(current_agents)
 
             trajectories, payoffs = env.run(is_training=True)  # run a full game
+            score_diffs = env.get_score_diff() if include_aux_targets else payoffs
             for p in train_players:
                 size[p] += len(trajectories[p][:-1]) // 2
                 diff = size[p] - len(target_buf[p])
                 if diff > 0:
+                    ep_ret = float(score_diffs[p]) if include_aux_targets else float(payoffs[p])
                     done_buf[p].extend([False for _ in range(diff-1)])
                     done_buf[p].append(True)
                     episode_return_buf[p].extend([0.0 for _ in range(diff-1)])
-                    episode_return_buf[p].append(float(payoffs[p]))
-                    target_buf[p].extend([float(payoffs[p]) for _ in range(diff)])
+                    episode_return_buf[p].append(ep_ret)
+                    target_buf[p].extend([ep_ret for _ in range(diff)])
+                    if include_aux_targets:
+                        wdl_label = 2 if ep_ret > 0 else (1 if ep_ret == 0 else 0)
+                        wdl_target_buf[p].extend([wdl_label for _ in range(diff)])
                     # State and action
                     for idx in range(0, len(trajectories[p])-2, 2):
                         state = trajectories[p][idx]['obs']
                         action = env.get_action_feature(trajectories[p][idx+1])
                         state_buf[p].append(torch.from_numpy(state))
                         action_buf[p].append(torch.from_numpy(action))
+                        if include_aux_targets:
+                            turn = int(trajectories[p][idx]['raw_obs']['cur_turn'])
+                            oppo_priv_cards = env.game.get_oppo_private_at_turn(p, turn)
+                            oppo_priv_buf[p].append(torch.from_numpy(_cards2array(oppo_priv_cards)).to(torch.int8))
                 
                 while size[p] > T:
                     index = free_queue[p].get()
@@ -203,6 +222,11 @@ def act(
                     buffers[p]['target'][index].copy_(torch.as_tensor(target_buf[p][:T], dtype=torch.float32))
                     buffers[p]['state'][index].copy_(torch.stack(state_buf[p][:T]))
                     buffers[p]['action'][index].copy_(torch.stack(action_buf[p][:T]))
+                    if include_aux_targets:
+                        buffers[p]['wdl_target'][index].copy_(torch.as_tensor(wdl_target_buf[p][:T], dtype=torch.int64))
+                        buffers[p]['oppo_priv'][index].copy_(torch.stack(oppo_priv_buf[p][:T]))
+                        wdl_target_buf[p] = wdl_target_buf[p][T:]
+                        oppo_priv_buf[p] = oppo_priv_buf[p][T:]
                     full_queue[p].put(index)
                     done_buf[p] = done_buf[p][T:]
                     episode_return_buf[p] = episode_return_buf[p][T:]

@@ -23,9 +23,11 @@ from collections import deque
 import torch
 from torch import multiprocessing as mp
 from torch import nn
+import torch.nn.functional as F
 
 from .file_writer import FileWriter
 from tensorboardX import SummaryWriter
+from .equivariant_model import EquivariantDMCModel
 from .model import DMCModel, _normalize_device
 from .pettingzoo_model import DMCModelPettingZoo
 from .symmetry import build_swy_blm_symmetry_tables
@@ -69,6 +71,8 @@ def learn(
     loss_type='mse',
     loss_beta=2.0,
     snapshot_target=None,
+    diff_loss_weight=0.05,
+    belief_loss_weight=0.5,
 ):
     """Performs a learning (optimization) step."""
     device = _normalize_device(training_device)
@@ -76,8 +80,12 @@ def learn(
     action = torch.flatten(batch['action'].to(device, non_blocking=True), 0, 1).float()
     target = torch.flatten(batch['target'].to(device, non_blocking=True), 0, 1)
     episode_returns = batch['episode_return'][batch['done']]
+    is_equivariant = ('wdl_target' in batch and 'oppo_priv' in batch and hasattr(agent, 'forward_all'))
+    if is_equivariant:
+        wdl_target = torch.flatten(batch['wdl_target'].to(device, non_blocking=True), 0, 1).long()
+        oppo_priv = torch.flatten(batch['oppo_priv'].to(device, non_blocking=True), 0, 1).float()
 
-    if symmetry_tables is not None:
+    if symmetry_tables is not None and not is_equivariant:
         obs_perms, act_perms = symmetry_tables
         n = state.shape[0]
         if aug_copies <= 1:
@@ -104,12 +112,39 @@ def learn(
             else 0.0
         )
 
-        values = agent.forward(state, action)
-        loss = compute_loss(values, target, loss_type=loss_type, loss_beta=loss_beta)
-        stats = {
-            'mean_episode_return_'+str(position): mean_return,
-            'loss_'+str(position): loss.item(),
-        }
+        if is_equivariant:
+            wdl_logits, diff_pred, belief_logits, belief_logits_mid = agent.forward_all(state)
+            action_idx = action.argmax(dim=1)
+            batch_arange = torch.arange(state.shape[0], device=device)
+            chosen_wdl = wdl_logits[batch_arange, action_idx]
+            chosen_diff = diff_pred[batch_arange, action_idx]
+
+            loss_wdl = F.cross_entropy(chosen_wdl, wdl_target)
+            loss_diff = F.mse_loss(chosen_diff, target)
+            unseen_mask = state[:, 110:132]
+            denom = unseen_mask.sum().clamp(min=1.0)
+            loss_belief_out = (
+                F.binary_cross_entropy_with_logits(belief_logits, oppo_priv, reduction='none') * unseen_mask
+            ).sum() / denom
+            loss_belief_mid = (
+                F.binary_cross_entropy_with_logits(belief_logits_mid, oppo_priv, reduction='none') * unseen_mask
+            ).sum() / denom
+            loss_belief = loss_belief_out + 0.5 * loss_belief_mid
+            loss = loss_wdl + diff_loss_weight * loss_diff + belief_loss_weight * loss_belief
+            stats = {
+                'mean_episode_return_'+str(position): mean_return,
+                'loss_'+str(position): loss.item(),
+                'loss_wdl_'+str(position): loss_wdl.item(),
+                'loss_diff_'+str(position): loss_diff.item(),
+                'loss_belief_'+str(position): loss_belief.item(),
+            }
+        else:
+            values = agent.forward(state, action)
+            loss = compute_loss(values, target, loss_type=loss_type, loss_beta=loss_beta)
+            stats = {
+                'mean_episode_return_'+str(position): mean_return,
+                'loss_'+str(position): loss.item(),
+            }
 
         optimizer.zero_grad()
         loss.backward()
@@ -200,6 +235,12 @@ class DMCTrainer:
         rule_opponent_prob=0.0,
         snapshot_pool_size=8,
         snapshot_interval=1000,
+        arch='mlp',
+        d_model=128,
+        num_blocks=3,
+        margin_weight=0.02,
+        diff_loss_weight=0.05,
+        belief_loss_weight=0.5,
     ):
         self.env = env
 
@@ -234,6 +275,16 @@ class DMCTrainer:
         self.momentum = momentum
         self.epsilon = epsilon
 
+        self.arch = arch
+        if self.arch not in ('mlp', 'equivariant'):
+            raise ValueError(f"Unsupported DMCTrainer arch: {self.arch}")
+        self.mlp_layers = list(mlp_layers)
+        self.d_model = int(d_model)
+        self.num_blocks = int(num_blocks)
+        self.margin_weight = float(margin_weight)
+        self.diff_loss_weight = float(diff_loss_weight)
+        self.belief_loss_weight = float(belief_loss_weight)
+
         self.is_pettingzoo_env = is_pettingzoo_env
         if not self.is_pettingzoo_env:
             self.num_players = self.env.num_players
@@ -241,15 +292,32 @@ class DMCTrainer:
             if self.action_shape[0] == None:  # One-hot encoding
                 self.action_shape = [[self.env.num_actions] for _ in range(self.num_players)]
 
-            def model_func(device):
-                return DMCModel(
-                    self.env.state_shape,
-                    self.action_shape,
-                    mlp_layers=mlp_layers,
-                    exp_epsilon=self.exp_epsilon,
-                    device=str(device),
-                )
+            if self.arch == 'equivariant':
+                if getattr(self.env, 'name', None) != 'swy-blm' or getattr(self.env, 'obs_mode', None) != 'v4':
+                    raise ValueError("arch='equivariant' requires swy-blm env with obs_mode='v4'")
+
+                def model_func(device):
+                    return EquivariantDMCModel(
+                        self.env.state_shape,
+                        self.action_shape,
+                        d_model=self.d_model,
+                        num_blocks=self.num_blocks,
+                        margin_weight=self.margin_weight,
+                        exp_epsilon=self.exp_epsilon,
+                        device=str(device),
+                    )
+            else:
+                def model_func(device):
+                    return DMCModel(
+                        self.env.state_shape,
+                        self.action_shape,
+                        mlp_layers=mlp_layers,
+                        exp_epsilon=self.exp_epsilon,
+                        device=str(device),
+                    )
         else:
+            if self.arch == 'equivariant':
+                raise ValueError("arch='equivariant' is not supported for PettingZoo envs")
             self.num_players = self.env.num_agents
 
             def model_func(device):
@@ -273,11 +341,17 @@ class DMCTrainer:
             else:
                 self.device_iterator = range(num_actor_devices)
 
-        if augment_symmetry is None:
-            self.augment_symmetry = (not self.is_pettingzoo_env and getattr(self.env, 'name', None) == 'swy-blm')
+        if self.arch == 'equivariant':
+            self.augment_symmetry = False
+            self.aug_copies = 1
+            self.include_aux_targets = True
         else:
-            self.augment_symmetry = bool(augment_symmetry)
-        self.aug_copies = max(1, int(aug_copies))
+            if augment_symmetry is None:
+                self.augment_symmetry = (not self.is_pettingzoo_env and getattr(self.env, 'name', None) == 'swy-blm')
+            else:
+                self.augment_symmetry = bool(augment_symmetry)
+            self.aug_copies = max(1, int(aug_copies))
+            self.include_aux_targets = False
         self.loss_type = loss_type
         self.loss_beta = float(loss_beta)
         self.snapshot_prob = max(0.0, float(snapshot_prob))
@@ -305,6 +379,7 @@ class DMCTrainer:
                 self.env.state_shape,
                 self.action_shape,
                 self.device_iterator,
+                include_aux_targets=self.include_aux_targets,
             )
         else:
             buffers = create_buffers_pettingzoo(
@@ -418,7 +493,8 @@ class DMCTrainer:
                     if self.is_pettingzoo_env
                     else (
                         i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env,
-                        snapshot_models, num_snapshots_ready, self.snapshot_prob, self.rule_opponent_prob
+                        snapshot_models, num_snapshots_ready, self.snapshot_prob, self.rule_opponent_prob,
+                        self.include_aux_targets
                     )
                 )
                 actor = ctx.Process(
@@ -438,7 +514,15 @@ class DMCTrainer:
                 'scheduler_state_dict': [scheduler.state_dict() for scheduler in schedulers],
                 "stats": stats,
                 'frames': frames,
-                'iterations': iterations
+                'iterations': iterations,
+                'arch': self.arch,
+                'obs_mode': getattr(self.env, 'obs_mode', None),
+                'model_config': {
+                    'mlp_layers': self.mlp_layers,
+                    'd_model': self.d_model,
+                    'num_blocks': self.num_blocks,
+                    'margin_weight': self.margin_weight,
+                },
             }, self.checkpointpath)
 
             if save_eval:
@@ -490,6 +574,8 @@ class DMCTrainer:
                     loss_type=self.loss_type,
                     loss_beta=self.loss_beta,
                     snapshot_target=snapshot_target,
+                    diff_loss_weight=self.diff_loss_weight,
+                    belief_loss_weight=self.belief_loss_weight,
                 )
 
                 with lock:
@@ -501,9 +587,10 @@ class DMCTrainer:
                     #print("position={}, device={}, i={}, iterations={}".format(position, device, i, iterations))
                     
                     if iterations[position] % 1000 == 0:
-                        for k in _stats:
-                            stats[k] = _stats[k]
-                            self.summary_writer.add_scalar('train/' + k, _stats[k], iterations[position])
+                        for k, v in _stats.items():
+                            if k in stats:
+                                stats[k] = v
+                            self.summary_writer.add_scalar('train/' + k, v, iterations[position])
                         self.summary_writer.add_scalar('train/learning_rate_{}'.format(position), optimizers[position].param_groups[0]['lr'], iterations[position])
                         to_log = dict(frames=frames)
                         to_log.update({k: stats[k] for k in stat_keys})
