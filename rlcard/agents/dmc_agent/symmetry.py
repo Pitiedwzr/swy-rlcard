@@ -16,7 +16,7 @@ def build_swy_blm_symmetry_tables(obs_dim=264, include_joker_swap=True):
         obs_perms: LongTensor of shape (num_syms, obs_dim)
         act_perms: LongTensor of shape (num_syms, 44)
     """
-    if obs_dim not in (230, 264):
+    if obs_dim not in (230, 264, 318):
         raise ValueError(f"Unsupported swy-blm obs_dim: {obs_dim}")
 
     suit_perms = list(itertools.permutations(range(4)))       # 24
@@ -40,6 +40,16 @@ def build_swy_blm_symmetry_tables(obs_dim=264, include_joker_swap=True):
 
                     # Observation vector layout (see SwyBlmEnv._extract_state)
                     obs_perm = []
+                    if obs_dim == 318:
+                        # 12 card regions of 22 dims each:
+                        # 6 state masks (0..131) + 6 oppo_pub_by_step masks (132..263)
+                        for base in range(0, 264, 22):
+                            obs_perm.extend(base + idx for idx in card_perm)
+                        # 54 permutation-invariant timing/space/turn/player features (264..317)
+                        obs_perm.extend(range(264, 318))
+                        obs_rows.append(obs_perm)
+                        continue
+
                     # 5 card regions: board_public, cur_public, cur_private, oppo_public, cur_hand (0..109)
                     for base in (0, 22, 44, 66, 88):
                         obs_perm.extend(base + idx for idx in card_perm)

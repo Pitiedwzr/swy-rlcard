@@ -30,7 +30,7 @@ class SwyBlmGame:
         self.final_score = [0, 0]
         self.final_tables = []
         self.winner_id = None
-        #self.history = []
+        self.history = []
 
         # initialize players
         self.player_hands = [[], []]
@@ -73,7 +73,9 @@ class SwyBlmGame:
             self.player_private_cards[self.current_player].append(card)
         else:  # put in public
             self.player_public_cards[self.current_player].append(card)
-            
+
+        self.history.append((self.current_player, card, sec, self.current_turn))
+
         # switch turn
         self.current_player = int(1 - self.current_player)
         self.current_turn += 1
@@ -159,8 +161,27 @@ class SwyBlmGame:
         state['cur_private'] = self.player_private_cards[player_id].copy()
         state['oppo_public'] = self.player_public_cards[opponent_id].copy()
         state['oppo_private_count'] = len(self.player_private_cards[opponent_id])
+        state['cur_history'] = [
+            (card, turn, sec)
+            for (p, card, sec, turn) in self.history
+            if p == player_id
+        ]
+        state['oppo_history'] = [
+            (card if sec == 1 else None, turn, sec)
+            for (p, card, sec, turn) in self.history
+            if p == opponent_id
+        ]
         
         return state
+
+    def get_oppo_private_at_turn(self, player_id, turn):
+        '''Return opponent private cards played strictly before ``turn`` (for training supervision).'''
+        opponent_id = int(1 - player_id)
+        return [
+            card
+            for (p, card, sec, move_turn) in self.history
+            if p == opponent_id and sec == 0 and move_turn < turn
+        ]
 
     def get_num_actions(self):
         ''' Return the total number of abstract acitons
