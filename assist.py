@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 import rlcard
-from rlcard.agents.dmc_agent.model import DMCAgent
+from evaluate import load_dmc_agents
 from rlcard.agents.dmc_search_agent import DMCSearchAgent
 from rlcard.games.bailongmen.utils import DECK, ID_2_ACTION
 from rlcard.games.bailongmen.utils import check_cards_validity
@@ -88,6 +88,8 @@ def assist_game(env, agents):
         raw_obs['cur_private'] = []
         raw_obs['oppo_public'] = []
         raw_obs['oppo_private_count'] = 0
+        raw_obs['cur_history'] = []
+        raw_obs['oppo_history'] = []
 
         while turn < 12:
             # opponent turn
@@ -100,9 +102,11 @@ def assist_game(env, agents):
                 if oppo_action == '?':
                     print("{} played a private card.".format(color_your_oppo("Your opponent")))
                     raw_obs['oppo_private_count'] += 1
+                    raw_obs['oppo_history'].append((None, turn, 0))
                 else:
                     print("{} played a public card {}.".format(color_your_oppo("Your opponent"), bold(oppo_action)))
                     raw_obs['oppo_public'].append(oppo_action)
+                    raw_obs['oppo_history'].append((oppo_action, turn, 1))
 
                 turn += 1
 
@@ -127,6 +131,7 @@ def assist_game(env, agents):
             input("{} are now expected to win {} points over {} in the end! Press <ENTER> to proceed... ".format(color_you("You"), bold(str(exp_winning_score)), color_your_oppo("your opponent")))
             raw_obs['cur_' + sec].append(card)
             raw_obs['cur_hand'].remove(card)
+            raw_obs['cur_history'].append((card, turn, 1 if sec == "public" else 0))
 
             turn += 1
 
@@ -151,27 +156,14 @@ if __name__ == '__main__':
     parser.add_argument('--cuda', action='store_true')
     parser.add_argument('--ai_agent', type=str, required=True)
     parser.add_argument('--model_path', type=str, required=True)
+    parser.add_argument('--sym_avg_k', type=int, default=1)
     args = parser.parse_args()
 
     DEVICE = "cuda:0" if args.cuda else "cpu"
 
-    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
-    first_weight = ckpt_states['model_state_dict'][0].get('fc_layers.0.weight')
-    legacy_obs = (first_weight is not None and int(first_weight.shape[1]) == 274)
-
-    ## Make environment (for info only; not used for gaming)
-    env = rlcard.make('swy-blm', config={'legacy_obs': legacy_obs})
-
-    ## Prepare agents
+    ## Prepare environment and agents
     if args.ai_agent in ('dmc', 'dmc_search'):
-        base_agents = []
-        for p in range(env.num_players):
-            base_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
-
-        # load trained ai agents
-        for p in range(env.num_players):
-            base_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
-
+        env, base_agents, _ = load_dmc_agents(args.model_path, device=DEVICE, sym_avg_k=args.sym_avg_k)
         if args.ai_agent == 'dmc_search':
             ai_agents = [DMCSearchAgent(base_agents, p) for p in range(env.num_players)]
         else:

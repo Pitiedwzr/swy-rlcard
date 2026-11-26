@@ -11,8 +11,14 @@ from rlcard.agents.dmc_agent import DMCTrainer
 def train(args):
 
     # Make the environment
+    obs_mode = args.obs_mode
+    if obs_mode is None:
+        if args.arch == 'equivariant':
+            obs_mode = 'v4'
+        else:
+            obs_mode = 'legacy' if args.legacy_obs else 'v2'
     env_config = (
-        {'legacy_obs': args.legacy_obs, 'win_reward_weight': args.win_reward_weight}
+        {'obs_mode': obs_mode, 'win_reward_weight': args.win_reward_weight}
         if args.env == 'swy-blm'
         else {}
     )
@@ -47,6 +53,12 @@ def train(args):
         rule_opponent_prob=args.rule_opponent_prob,
         snapshot_pool_size=args.snapshot_pool_size,
         snapshot_interval=args.snapshot_interval,
+        arch=args.arch,
+        d_model=args.d_model,
+        num_blocks=args.num_blocks,
+        margin_weight=args.margin_weight,
+        diff_loss_weight=args.diff_loss_weight,
+        belief_loss_weight=args.belief_loss_weight,
     )
 
     # Train DMC Agents
@@ -225,6 +237,48 @@ if __name__ == '__main__':
         default=1000,
         type=int,
         help='Learner steps between saving a snapshot into the pool (default: 1000)',
+    )
+    parser.add_argument(
+        '--arch',
+        default='mlp',
+        choices=['mlp', 'equivariant'],
+        help='Model architecture: mlp (default) or 576-equivariant multi-head network',
+    )
+    parser.add_argument(
+        '--obs_mode',
+        default=None,
+        choices=['legacy', 'v2', 'v4'],
+        help='Observation mode for swy-blm (auto-selected from --arch/--legacy_obs when omitted)',
+    )
+    parser.add_argument(
+        '--d_model',
+        default=128,
+        type=int,
+        help='Hidden dimension for equivariant architecture (default: 128)',
+    )
+    parser.add_argument(
+        '--num_blocks',
+        default=3,
+        type=int,
+        help='Number of axial equivariant interaction blocks (default: 3)',
+    )
+    parser.add_argument(
+        '--margin_weight',
+        default=0.02,
+        type=float,
+        help='Tie-breaker weight on predicted score_diff in equivariant action utility (default: 0.02)',
+    )
+    parser.add_argument(
+        '--diff_loss_weight',
+        default=0.05,
+        type=float,
+        help='MSE score_diff loss weight for equivariant multi-head training (default: 0.05)',
+    )
+    parser.add_argument(
+        '--belief_loss_weight',
+        default=0.5,
+        type=float,
+        help='Masked BCE opponent-private belief loss weight for equivariant training (default: 0.5)',
     )
 
     args = parser.parse_args()

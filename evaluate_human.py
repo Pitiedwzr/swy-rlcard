@@ -3,8 +3,8 @@
 import argparse
 
 import rlcard
+from evaluate import load_dmc_agents
 from rlcard.agents.human_agent import HumanAgent, _print_action
-from rlcard.agents.dmc_agent.model import DMCAgent
 from rlcard.games.bailongmen.utils import SUIT, COLOR
 
 from rlcard.utils.color import bcolor
@@ -17,6 +17,7 @@ parser.add_argument('--cuda', action='store_true')
 parser.add_argument('--ai_agent', type=str, required=True)
 parser.add_argument('--model_path', type=str, required=True)
 parser.add_argument('--human_order', type=int, choices=[1, 2], default=None)
+parser.add_argument('--sym_avg_k', type=int, default=1)
 args = parser.parse_args()
 
 DEVICE = "cuda:0" if args.cuda else "cpu"
@@ -29,22 +30,11 @@ def _you_code(you):
         
 if __name__ == "__main__":
 
-    ckpt_states = torch.load(args.model_path, map_location=DEVICE, weights_only=False)
-    first_weight = ckpt_states['model_state_dict'][0].get('fc_layers.0.weight')
-    legacy_obs = (first_weight is not None and int(first_weight.shape[1]) == 274)
-
-    ## Make environment
-    env = rlcard.make('swy-blm', config={'legacy_obs': legacy_obs})
-
-    ## Prepare agents
+    ## Prepare environment and agents
     if args.ai_agent == 'dmc':
-        ai_agents = []
-        for p in range(env.num_players):
-            ai_agents.append(DMCAgent(env.state_shape[p], env.action_shape[p], mlp_layers=[256, 256, 256, 128], device=DEVICE))
-
-    # load trained ai agents
-    for p in range(env.num_players):
-        ai_agents[p].load_state_dict(ckpt_states['model_state_dict'][p])
+        env, ai_agents, _ = load_dmc_agents(args.model_path, device=DEVICE, sym_avg_k=args.sym_avg_k)
+    else:
+        raise NotImplementedError(f"Unsupported ai_agent: {args.ai_agent}")
 
     print("AI model version: {} at {}".format(ai_agents[0].__class__, args.model_path))
 

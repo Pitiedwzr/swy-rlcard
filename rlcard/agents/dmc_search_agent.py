@@ -31,6 +31,28 @@ def _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_pr
     n = board_pub.shape[0]
     obs = np.zeros((n, obs_dim), dtype=np.float32)
 
+    cur_pub_cnt = cur_pub.sum(axis=1).astype(np.int64)
+    cur_priv_cnt = cur_priv.sum(axis=1).astype(np.int64)
+    oppo_pub_cnt = oppo_pub.sum(axis=1).astype(np.int64)
+
+    if obs_dim == 318:
+        obs[:, 0:22] = board_pub
+        obs[:, 22:44] = cur_pub
+        obs[:, 44:66] = cur_priv
+        obs[:, 66:88] = oppo_pub
+        obs[:, 88:110] = cur_hand
+        seen = np.clip(board_pub + cur_pub + cur_priv + oppo_pub + cur_hand, 0.0, 1.0)
+        obs[:, 110:132] = 1.0 - seen
+        idx = np.arange(n)
+        obs[idx, 288 + (3 - cur_pub_cnt)] = 1.0
+        obs[idx, 292 + (3 - cur_priv_cnt)] = 1.0
+        obs[idx, 296 + (3 - oppo_pub_cnt)] = 1.0
+        obs[idx, 300 + (3 - oppo_priv_count)] = 1.0
+        if cur_turn is not None and 0 <= int(cur_turn) < 12:
+            obs[:, 304 + int(cur_turn)] = 1.0
+            obs[:, 316 + (int(cur_turn) % 2)] = 1.0
+        return obs
+
     obs[:, 0:22] = board_pub
     obs[:, 22:44] = cur_pub
     obs[:, 44:66] = cur_priv
@@ -38,10 +60,6 @@ def _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_pr
     obs[:, 88:110] = cur_hand
 
     idx = np.arange(n)
-    cur_pub_cnt = cur_pub.sum(axis=1).astype(np.int64)
-    cur_priv_cnt = cur_priv.sum(axis=1).astype(np.int64)
-    oppo_pub_cnt = oppo_pub.sum(axis=1).astype(np.int64)
-
     obs[idx, 110 + (3 - cur_pub_cnt)] = 1.0
     obs[idx, 114 + (3 - cur_priv_cnt)] = 1.0
     obs[idx, 118 + (3 - oppo_pub_cnt)] = 1.0
@@ -85,7 +103,8 @@ def _extract_obs_batch(board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_pr
 def _batch_best_actions_and_values(dmc_agent, board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count, cur_turn=None):
     """For N states, return best action_id (N,) and max Q value (N,)."""
     n = board_pub.shape[0]
-    obs_dim = int(dmc_agent.net.fc_layers[0].in_features) - 44
+    is_equivariant = hasattr(dmc_agent, 'forward_all')
+    obs_dim = 318 if is_equivariant else int(dmc_agent.net.fc_layers[0].in_features) - 44
     obs = _extract_obs_batch(
         board_pub, cur_pub, cur_priv, oppo_pub, cur_hand, oppo_priv_count,
         obs_dim=obs_dim, cur_turn=cur_turn,
@@ -93,6 +112,25 @@ def _batch_best_actions_and_values(dmc_agent, board_pub, cur_pub, cur_priv, oppo
 
     can_priv = (cur_priv.sum(axis=1) < 3)
     can_pub = (cur_pub.sum(axis=1) < 3)
+
+    if is_equivariant:
+        obs_t = torch.from_numpy(obs).to(dmc_agent.device)
+        wdl_logits, diff_pred, _, _ = dmc_agent.forward_all(obs_t)
+        all_utils = dmc_agent.net.compute_utility(wdl_logits, diff_pred).cpu().numpy()
+        best_actions = np.zeros(n, dtype=np.int64)
+        best_values = np.zeros(n, dtype=np.float32)
+        for i in range(n):
+            cards = np.flatnonzero(cur_hand[i])
+            legal = []
+            if can_pub[i]:
+                legal.extend((cards + 22).tolist())
+            if can_priv[i]:
+                legal.extend(cards.tolist())
+            sub_u = all_utils[i, legal]
+            best_idx = int(np.argmax(sub_u))
+            best_actions[i] = legal[best_idx]
+            best_values[i] = sub_u[best_idx]
+        return best_actions, best_values
 
     obs_list = []
     act_list = []
