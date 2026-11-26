@@ -57,13 +57,18 @@ class DMCAgent:
         action_shape,
         mlp_layers=[512,512,512,512,512],
         exp_epsilon=0.01,
-        device="0"
+        device="0",
+        sym_avg_k=1,
     ):
         self.use_raw = False
         self.device = _normalize_device(device)
         self.net = DMCNet(state_shape, action_shape, mlp_layers).to(self.device)
         self.exp_epsilon = exp_epsilon
         self.action_shape = action_shape
+        self.state_shape = state_shape
+        self.sym_avg_k = max(1, int(sym_avg_k))
+        self._sym_tables = None
+        self._sym_indices = None
 
     def step(self, state):
         action_keys, values = self.predict(state)
@@ -96,6 +101,22 @@ class DMCAgent:
     def parameters(self):
         return self.net.parameters()
 
+    def _get_sym_tables(self, obs_dim):
+        if self._sym_tables is None:
+            from .symmetry import build_swy_blm_symmetry_tables
+            obs_perms, act_perms = build_swy_blm_symmetry_tables(obs_dim=obs_dim)
+            k = min(self.sym_avg_k, int(obs_perms.shape[0]))
+            if k >= int(obs_perms.shape[0]):
+                idx = torch.arange(obs_perms.shape[0], dtype=torch.long)
+            else:
+                rng = np.random.default_rng(0)
+                idx = torch.from_numpy(rng.choice(obs_perms.shape[0], size=k, replace=False)).long()
+            self._sym_tables = (
+                obs_perms[idx].to(self.device),
+                act_perms[idx].to(self.device),
+            )
+        return self._sym_tables
+
     def predict(self, state):
         # Prepare obs and actions
         obs = state['obs'].astype(np.float32)
@@ -108,6 +129,19 @@ class DMCAgent:
                 action_values[i] = np.zeros(self.action_shape[0])
                 action_values[i][action_keys[i]] = 1
         action_values = np.array(action_values, dtype=np.float32)
+
+        obs_dim = int(obs.shape[0])
+        if self.sym_avg_k > 1 and obs_dim in (230, 264) and int(action_values.shape[1]) == 44:
+            obs_perms, act_perms = self._get_sym_tables(obs_dim)
+            k = int(obs_perms.shape[0])
+            num_a = len(action_keys)
+            obs_t = torch.from_numpy(obs).to(self.device)
+            act_t = torch.from_numpy(action_values).to(self.device)
+            obs_sym = obs_t[obs_perms].unsqueeze(1).expand(-1, num_a, -1).reshape(k * num_a, obs_dim)
+            act_sym = act_t[:, act_perms].permute(1, 0, 2).reshape(k * num_a, 44)
+            with torch.no_grad():
+                values = self.net.forward(obs_sym, act_sym).reshape(k, num_a).mean(dim=0)
+            return action_keys, values.cpu().numpy()
 
         obs = np.repeat(obs[np.newaxis, :], len(action_keys), axis=0)
 
@@ -130,6 +164,7 @@ class DMCAgent:
     def set_device(self, device):
         self.device = _normalize_device(device)
         self.net.to(self.device)
+        self._sym_tables = None
 
 class DMCModel:
     def __init__(
