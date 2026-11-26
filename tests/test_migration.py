@@ -225,3 +225,115 @@ def test_train_dmc_and_evaluate_cli_smoke(tmp_path):
         )
         assert proc_eval.returncode == 0, proc_eval.stderr
         assert 'first_avg_score' in proc_eval.stdout
+
+
+def test_swy_blm_v4_history_privacy_and_equivariance():
+    from rlcard.agents.dmc_agent.equivariant_model import EquivariantDMCAgent, SwyBlmEquivariantNet
+    from rlcard.agents.dmc_agent.symmetry import build_swy_blm_symmetry_tables
+
+    set_seed(11)
+    env = rlcard.make('swy-blm', config={'seed': 11, 'obs_mode': 'v4'})
+    assert env.state_shape == [[318], [318]]
+
+    agents = [
+        EquivariantDMCAgent(env.state_shape[p], env.action_shape[p], d_model=32, num_blocks=2, device='cpu')
+        for p in range(2)
+    ]
+    env.set_agents(agents)
+    trajs, _ = env.run(is_training=False)
+
+    for p in range(2):
+        for idx in range(0, len(trajs[p]) - 2, 2):
+            raw = trajs[p][idx]['raw_obs']
+            for card, _, sec in raw['oppo_history']:
+                if sec == 0:
+                    assert card is None
+            turn = int(raw['cur_turn'])
+            oppo_priv = env.game.get_oppo_private_at_turn(p, turn)
+            assert len(oppo_priv) == raw['oppo_private_count']
+
+    obs_perms, act_perms = build_swy_blm_symmetry_tables(obs_dim=318)
+    net = SwyBlmEquivariantNet(d_model=32, num_blocks=2)
+    net.eval()
+
+    sample_obs = torch.from_numpy(trajs[0][4]['obs']).float().unsqueeze(0)
+    with torch.no_grad():
+        wdl0, diff0, bel0, bel_mid0 = net.forward_all(sample_obs)
+        rng = np.random.default_rng(123)
+        for si in rng.choice(obs_perms.shape[0], size=24, replace=False):
+            op = obs_perms[si]
+            ap = act_perms[si]
+            cp = ap[:22]
+            p_obs = sample_obs[:, op]
+            wdl1, diff1, bel1, bel_mid1 = net.forward_all(p_obs)
+            assert torch.allclose(wdl1, wdl0[:, ap, :], atol=1e-4, rtol=1e-4)
+            assert torch.allclose(diff1, diff0[:, ap], atol=1e-4, rtol=1e-4)
+            assert torch.allclose(bel1, bel0[:, cp], atol=1e-4, rtol=1e-4)
+            assert torch.allclose(bel_mid1, bel_mid0[:, cp], atol=1e-4, rtol=1e-4)
+
+
+def test_dmc_agent_sym_avg():
+    env = rlcard.make('swy-blm', config={'seed': 5, 'obs_mode': 'v2'})
+    agent = DMCAgent(env.state_shape[0], env.action_shape[0], mlp_layers=[32, 32], device='cpu', sym_avg_k=8)
+    state, _ = env.reset()
+    action, info = agent.eval_step(state)
+    assert action in state['legal_actions']
+    assert 'values' in info
+
+
+def test_equivariant_dmc_train_resume_and_evaluate_cli_smoke(tmp_path):
+    savedir = str(tmp_path / 'eq_runs')
+    common_args = [
+        sys.executable,
+        'train_dmc.py',
+        '--env', 'swy-blm',
+        '--arch', 'equivariant',
+        '--d_model', '32',
+        '--num_blocks', '2',
+        '--xpid', 'eq_test',
+        '--actor_device', 'cpu',
+        '--num_actor_devices', '1',
+        '--num_actors', '2',
+        '--training_device', 'cpu',
+        '--batch_size', '8',
+        '--num_buffers', '16',
+        '--num_threads', '1',
+        '--sync_interval', '5',
+        '--snapshot_prob', '0.0',
+        '--rule_opponent_prob', '0.0',
+        '--savedir', savedir,
+    ]
+    proc_train = subprocess.run(
+        common_args + ['--total_iterations', '40'],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc_train.returncode == 0, proc_train.stderr
+    model_path = os.path.join(savedir, 'eq_test', 'model.tar')
+    assert os.path.exists(model_path)
+
+    proc_resume = subprocess.run(
+        common_args + ['--load_model', '--total_iterations', '50'],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc_resume.returncode == 0, proc_resume.stderr
+
+    for agent_name in ('dmc', 'dmc_search'):
+        proc_eval = subprocess.run(
+            [
+                sys.executable,
+                'evaluate.py',
+                '--ai_agent', agent_name,
+                '--model_path', model_path,
+                '--baseline_agent', 'rule-based',
+                '--total_simulations', '20',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert proc_eval.returncode == 0, proc_eval.stderr
+        assert 'first_avg_score' in proc_eval.stdout
