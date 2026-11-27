@@ -437,6 +437,32 @@ class EquivariantDMCAgent:
         }
         return action_keys, values, extra
 
+    @torch.no_grad()
+    def _predict_batch_utilities(self, obs_batch):
+        obs_t = torch.from_numpy(obs_batch).to(self.device)
+        wdl_logits, diff_pred, _, _ = self.net.forward_all(obs_t)
+        return self.net.compute_utility(wdl_logits, diff_pred).cpu().numpy()
+
+    def eval_step_batch(self, states):
+        obs_batch = np.stack([s["obs"] for s in states]).astype(np.float32, copy=False)
+        utilities = self._predict_batch_utilities(obs_batch)
+        actions = []
+        for b, s in enumerate(states):
+            keys = list(s["legal_actions"].keys())
+            actions.append(int(keys[int(np.argmax(utilities[b, keys]))]))
+        return actions
+
+    def step_batch(self, states, rng=None):
+        actions = self.eval_step_batch(states)
+        if self.exp_epsilon > 0:
+            rand_fn = rng.random if rng is not None else np.random.random
+            choice_fn = rng.choice if rng is not None else np.random.choice
+            for b, s in enumerate(states):
+                if rand_fn() < self.exp_epsilon:
+                    keys = list(s["legal_actions"].keys())
+                    actions[b] = int(choice_fn(keys))
+        return actions
+
     def predict(self, state):
         action_keys, values, _ = self.predict_detailed(state)
         return action_keys, values

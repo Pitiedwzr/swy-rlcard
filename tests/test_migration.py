@@ -391,3 +391,31 @@ def test_swy_blm_extract_state_fast_parity():
         assert feat.shape == (44,)
         assert feat.flags.writeable
 
+
+def test_dmc_agents_step_batch():
+    from rlcard.agents.dmc_agent.equivariant_model import EquivariantDMCAgent
+
+    set_seed(29)
+    env_v4 = rlcard.make('swy-blm', config={'seed': 29, 'obs_mode': 'v4'})
+    eq_agents = [
+        EquivariantDMCAgent(env_v4.state_shape[p], env_v4.action_shape[p], d_model=32, num_blocks=2, device='cpu')
+        for p in range(2)
+    ]
+    for a in eq_agents:
+        a.eval()
+
+    states = [env_v4.reset()[0] for _ in range(8)]
+    obs_b = np.stack([s['obs'] for s in states]).astype(np.float32)
+    utils_b = eq_agents[0]._predict_batch_utilities(obs_b)
+    for b, st in enumerate(states):
+        keys, vals_single = eq_agents[0].predict(st)
+        assert np.allclose(utils_b[b, keys], vals_single, atol=1e-5, rtol=1e-5)
+    acts_batch = eq_agents[0].step_batch(states, rng=np.random.default_rng(1))
+    assert all(a in s['legal_actions'] for a, s in zip(acts_batch, states))
+
+    env_v2 = rlcard.make('swy-blm', config={'seed': 29, 'obs_mode': 'v2'})
+    mlp_agent = DMCAgent(env_v2.state_shape[0], env_v2.action_shape[0], mlp_layers=[32, 32], device='cpu')
+    mlp_agent.eval()
+    states_v2 = [env_v2.reset()[0] for _ in range(8)]
+    assert mlp_agent.eval_step_batch(states_v2) == [mlp_agent.eval_step(s)[0] for s in states_v2]
+

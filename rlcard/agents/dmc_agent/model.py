@@ -152,6 +152,52 @@ class DMCAgent:
 
         return action_keys, values.cpu().numpy()
 
+    @torch.no_grad()
+    def eval_step_batch(self, states):
+        if self.sym_avg_k > 1:
+            return [self.eval_step(s)[0] for s in states]
+        obs_list = []
+        act_list = []
+        keys_list = []
+        counts = []
+        act_dim = int(self.action_shape[0])
+        for s in states:
+            legal_actions = s['legal_actions']
+            keys = list(legal_actions.keys())
+            keys_list.append(keys)
+            counts.append(len(keys))
+            obs = s['obs'].astype(np.float32, copy=False)
+            obs_list.append(np.broadcast_to(obs, (len(keys), obs.shape[0])))
+            for k in keys:
+                v = legal_actions[k]
+                if v is None:
+                    v = np.zeros(act_dim, dtype=np.float32)
+                    v[k] = 1.0
+                act_list.append(v)
+        all_obs = np.concatenate(obs_list, axis=0)
+        all_acts = np.asarray(act_list, dtype=np.float32)
+        values = self.net.forward(
+            torch.from_numpy(all_obs).to(self.device),
+            torch.from_numpy(all_acts).to(self.device),
+        ).cpu().numpy()
+        actions = []
+        offset = 0
+        for keys, n in zip(keys_list, counts):
+            best_idx = int(np.argmax(values[offset:offset + n]))
+            actions.append(int(keys[best_idx]))
+            offset += n
+        return actions
+
+    def step_batch(self, states, rng=None):
+        actions = self.eval_step_batch(states)
+        if self.exp_epsilon > 0:
+            rand_fn = rng.random if rng is not None else np.random.random
+            choice_fn = rng.choice if rng is not None else np.random.choice
+            for b, s in enumerate(states):
+                if rand_fn() < self.exp_epsilon:
+                    actions[b] = int(choice_fn(list(s['legal_actions'].keys())))
+        return actions
+
     def forward(self, obs, actions):
         return self.net.forward(obs, actions)
 
