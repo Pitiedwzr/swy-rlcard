@@ -419,3 +419,46 @@ def test_dmc_agents_step_batch():
     states_v2 = [env_v2.reset()[0] for _ in range(8)]
     assert mlp_agent.eval_step_batch(states_v2) == [mlp_agent.eval_step(s)[0] for s in states_v2]
 
+
+def test_batched_trainer_and_validate(tmp_path):
+    from rlcard.agents.dmc_agent.equivariant_model import EquivariantDMCAgent
+    from rlcard.agents.dmc_agent.utils import validate
+
+    set_seed(29)
+    env_v4 = rlcard.make('swy-blm', config={'seed': 29, 'obs_mode': 'v4'})
+    eq_agents = [
+        EquivariantDMCAgent(env_v4.state_shape[p], env_v4.action_shape[p], d_model=32, num_blocks=2, device='cpu')
+        for p in range(2)
+    ]
+    for a in eq_agents:
+        a.eval()
+
+    res = validate(env_v4, eq_agents, RuleBasedAgent(), M=16)
+    assert 'first_avg_winning_rate' in res and 'second_avg_winning_rate' in res
+
+    savedir = str(tmp_path / 'batched_eq')
+    trainer = DMCTrainer(
+        env_v4,
+        cuda='',
+        actor_device='cpu',
+        xpid='batched_eq_test',
+        savedir=savedir,
+        total_iterations=30,
+        num_actors=2,
+        actor_batch_size=8,
+        training_device='cpu',
+        batch_size=4,
+        unroll_length=6,
+        num_buffers=24,
+        num_threads=1,
+        sync_interval=5,
+        d_model=32,
+        num_blocks=2,
+        snapshot_prob=0.15,
+        rule_opponent_prob=0.15,
+        snapshot_pool_size=2,
+        snapshot_interval=10,
+    )
+    trainer.start()
+    assert os.path.exists(os.path.join(savedir, 'batched_eq_test', 'model.tar'))
+

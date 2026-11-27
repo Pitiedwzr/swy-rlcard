@@ -1,6 +1,10 @@
 ''' An example of training a Deep Monte-Carlo (DMC) Agent on the environments in RLCard
 '''
 import os
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 import argparse
 
 import torch
@@ -59,6 +63,7 @@ def train(args):
         margin_weight=args.margin_weight,
         diff_loss_weight=args.diff_loss_weight,
         belief_loss_weight=args.belief_loss_weight,
+        actor_batch_size=args.actor_batch_size,
     )
 
     # Train DMC Agents
@@ -279,6 +284,12 @@ if __name__ == '__main__':
         default=0.5,
         type=float,
         help='Masked BCE opponent-private belief loss weight for equivariant training (default: 0.5)',
+    )
+    parser.add_argument(
+        '--actor_batch_size',
+        default=0,
+        type=int,
+        help='Lockstep games simulated per actor process on swy-blm (0=auto: 64 for CUDA actors, 1 for CPU)',
     )
 
     args = parser.parse_args()

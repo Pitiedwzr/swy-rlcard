@@ -37,6 +37,7 @@ from .utils import (
     create_optimizers,
     create_schedulers,
     act,
+    act_batched,
     log,
     validate,
 )
@@ -241,6 +242,7 @@ class DMCTrainer:
         margin_weight=0.02,
         diff_loss_weight=0.05,
         belief_loss_weight=0.5,
+        actor_batch_size=0,
     ):
         self.env = env
 
@@ -361,9 +363,22 @@ class DMCTrainer:
         self.snapshot_pool_size = max(1, int(snapshot_pool_size))
         self.snapshot_interval = max(1, int(snapshot_interval))
 
+        req_actor_bs = int(actor_batch_size)
+        is_swy_blm = (not self.is_pettingzoo_env and getattr(self.env, 'name', None) == 'swy-blm')
+        if req_actor_bs <= 0:
+            if is_swy_blm and self.device_iterator != ['cpu']:
+                self.actor_batch_size = 64
+            else:
+                self.actor_batch_size = 1
+        elif req_actor_bs > 1 and not is_swy_blm:
+            log.warning('actor_batch_size > 1 is only supported on swy-blm; falling back to 1.')
+            self.actor_batch_size = 1
+        else:
+            self.actor_batch_size = req_actor_bs
+
     def start(self):
         # Initialize actor models
-        
+
         models = {}
         for device in self.device_iterator:
             model = self.model_func(device)
@@ -371,8 +386,9 @@ class DMCTrainer:
             model.eval()
             models[device] = model
 
-        # Initialize buffers
+        # Initialize buffers (keep buffers in CPU shared memory when batching or on Windows to avoid CUDA IPC pressure)
         if not self.is_pettingzoo_env:
+            buffer_on_cpu = (self.actor_batch_size > 1) or (os.name == 'nt')
             buffers = create_buffers(
                 self.T,
                 self.num_buffers,
@@ -380,6 +396,7 @@ class DMCTrainer:
                 self.action_shape,
                 self.device_iterator,
                 include_aux_targets=self.include_aux_targets,
+                buffer_on_cpu=buffer_on_cpu,
             )
         else:
             buffers = create_buffers_pettingzoo(
@@ -485,20 +502,32 @@ class DMCTrainer:
                     target_agent.load_state_dict(src_state_dict)
 
         # Starting actor processes
+        use_batched_actor = (
+            self.actor_batch_size > 1
+            and not self.is_pettingzoo_env
+            and getattr(self.env, 'name', None) == 'swy-blm'
+        )
         for device in self.device_iterator:
-            num_actors = self.num_actors
             for i in range(self.num_actors):
-                actor_args = (
-                    (i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env)
-                    if self.is_pettingzoo_env
-                    else (
+                if self.is_pettingzoo_env:
+                    actor_args = (i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env)
+                    actor_target = act_pettingzoo
+                elif use_batched_actor:
+                    actor_args = (
+                        i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env,
+                        snapshot_models, num_snapshots_ready, self.snapshot_prob, self.rule_opponent_prob,
+                        self.include_aux_targets, self.actor_batch_size
+                    )
+                    actor_target = act_batched
+                else:
+                    actor_args = (
                         i, device, self.T, free_queue[device], full_queue[device], models[device], buffers[device], self.env,
                         snapshot_models, num_snapshots_ready, self.snapshot_prob, self.rule_opponent_prob,
                         self.include_aux_targets
                     )
-                )
+                    actor_target = act
                 actor = ctx.Process(
-                    target=act_pettingzoo if self.is_pettingzoo_env else act,
+                    target=actor_target,
                     args=actor_args,
                     daemon=True,
                 )
@@ -534,11 +563,18 @@ class DMCTrainer:
                         learner_model.get_agent(position),
                         model_weights_dir
                     )
-                
+
+        start_wall = time.perf_counter()
+        last_log_wall = start_wall
+        init_frames = frames
+        last_log_frames = frames
+        init_iters = list(iterations)
+        latest_stats = dict(stats)
+
         def batch_and_learn(i, device, position, local_lock, position_lock, lock=threading.Lock()):
             """Thread target for the learning process."""
-            nonlocal frames, stats, iterations
-            
+            nonlocal frames, stats, iterations, last_log_wall, last_log_frames
+
             #while frames < self.total_frames:
             local_step = 0
             while iterations[position] < self.total_iterations :
@@ -584,8 +620,32 @@ class DMCTrainer:
                         num_snapshots_ready.value = min(self.snapshot_pool_size, min(snapshot_writes))
                     frames += self.T * self.B
                     iterations[position] += 1
-                    #print("position={}, device={}, i={}, iterations={}".format(position, device, i, iterations))
-                    
+                    for k, v in _stats.items():
+                        latest_stats[k] = v
+
+                    now = time.perf_counter()
+                    if position == 0 and (iterations[0] % 100 == 0 or (now - last_log_wall) >= 30.0):
+                        inst_fps = (frames - last_log_frames) / max(1e-6, now - last_log_wall)
+                        avg_fps = (frames - init_frames) / max(1e-6, now - start_wall)
+                        done_iters = max(1, iterations[0] - init_iters[0])
+                        rem_iters = max(0, self.total_iterations - iterations[0])
+                        eta_min = ((now - start_wall) / done_iters * rem_iters) / 60.0
+                        log.info(
+                            'Iter %d/%d | Frames %d | %.0f fps (avg %.0f) | ETA %.1fm | loss0=%.3f loss1=%.3f r0=%.2f r1=%.2f',
+                            iterations[0],
+                            self.total_iterations,
+                            frames,
+                            inst_fps,
+                            avg_fps,
+                            eta_min,
+                            latest_stats.get('loss_0', 0.0),
+                            latest_stats.get('loss_1', 0.0),
+                            latest_stats.get('mean_episode_return_0', 0.0),
+                            latest_stats.get('mean_episode_return_1', 0.0),
+                        )
+                        last_log_wall = now
+                        last_log_frames = frames
+
                     if iterations[position] % 1000 == 0:
                         for k, v in _stats.items():
                             if k in stats:
@@ -597,17 +657,17 @@ class DMCTrainer:
                         self.plogger.log(to_log)
                         if position == 0:
                             checkpoint(frames, iterations[position], save_eval=False)
-                            
+
                     # validation run
                     if position == 0 and (iterations[0] % 5000 == 0):
                         res = validate(self.env, learner_model.agents, RandomAgent(), M=1000)
                         for k, v in res.items():
                             self.summary_writer.add_scalar('val_random/' + k, v, iterations[0])
-                            
+
                         res = validate(self.env, learner_model.agents, RuleBasedAgent(), M=1000)
                         for k, v in res.items():
                             self.summary_writer.add_scalar('val_rule_based/' + k, v, iterations[0])
-                        
+
                     if iterations[position] % 50000 == 0:
                         checkpoint(frames, iterations[position])
 
