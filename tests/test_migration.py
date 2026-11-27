@@ -356,3 +356,38 @@ def test_cli_entrypoints_no_circular_import():
             timeout=30,
         )
         assert proc_help.returncode == 0, proc_help.stderr
+
+
+def test_swy_blm_extract_state_fast_parity():
+    from rlcard.agents.dmc_search_agent import _extract_obs_batch
+    from rlcard.games.bailongmen.utils import _cards2array
+
+    for obs_mode, expected_dim in (('legacy', 230), ('v2', 264), ('v4', 318)):
+        env = rlcard.make('swy-blm', config={'seed': 19, 'obs_mode': obs_mode})
+        env.set_agents([RandomAgent(44), RandomAgent(44)])
+        for _ in range(15):
+            trajs, _ = env.run(is_training=True)
+            for p in range(2):
+                for idx in range(0, len(trajs[p]) - 2, 2):
+                    st = trajs[p][idx]
+                    raw = st['raw_obs']
+                    assert st['obs'].shape == (expected_dim,)
+                    if obs_mode in ('legacy', 'v2'):
+                        ref = _extract_obs_batch(
+                            _cards2array(raw['board_public'])[None, :],
+                            _cards2array(raw['cur_public'])[None, :],
+                            _cards2array(raw['cur_private'])[None, :],
+                            _cards2array(raw['oppo_public'])[None, :],
+                            _cards2array(raw['cur_hand'])[None, :],
+                            np.array([raw['oppo_private_count']], dtype=np.int64),
+                            obs_dim=expected_dim,
+                            cur_turn=raw['cur_turn'],
+                        )[0]
+                        assert np.array_equal(st['obs'], ref)
+                    else:
+                        assert st['obs'][304 + int(raw['cur_turn'])] == 1.0
+                        assert st['obs'][316 + int(raw['player_id'])] == 1.0
+        feat = env.get_action_feature(0)
+        assert feat.shape == (44,)
+        assert feat.flags.writeable
+

@@ -30,11 +30,14 @@ ACTION_2_ID = {}
 for i, action in enumerate(ID_2_ACTION):
     ACTION_2_ID[action] = i
 
+CARD_TO_IDX = {card: i for i, card in enumerate(DECK)}
+
 def _cards2array(cards):
     array = np.zeros(len(DECK), dtype=np.float32)
-    for i, deck_card in enumerate(DECK):
-        if deck_card in cards:
-            array[i] = 1.
+    for card in cards:
+        idx = CARD_TO_IDX.get(card)
+        if idx is not None:
+            array[idx] = 1.
     return array
 
 def _cards2table(cards):

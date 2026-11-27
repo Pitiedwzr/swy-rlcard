@@ -3,20 +3,21 @@ import numpy as np
 
 from rlcard.envs import Env
 from rlcard.games.bailongmen.game import SwyBlmGame
-from rlcard.games.bailongmen.utils import ACTION_2_ID, DECK, ID_2_ACTION
-from rlcard.games.bailongmen.utils import _cards2array, _cards2table
+from rlcard.games.bailongmen.utils import ACTION_2_ID, CARD_TO_IDX, DECK, ID_2_ACTION
+from rlcard.games.bailongmen.utils import _cards2array
 
 
-CARD_TO_IDX = {c: i for i, c in enumerate(DECK)}
 OBS_V4_DIM = 318
+_SPACE_OH = np.eye(4, dtype=np.float32)
+_ACTION_OH = np.eye(len(ID_2_ACTION), dtype=np.float32)
 
 
 def one_hot(i, n):
     array = np.zeros(int(n))
     array[int(i)] = 1.
     return array
-        
-        
+
+
 class SwyBlmEnv(Env):
     ''' Swy-blm Environment
     '''
@@ -41,105 +42,104 @@ class SwyBlmEnv(Env):
         else:
             self.state_shape = [[OBS_V4_DIM], [OBS_V4_DIM]]
         self.action_shape = [[44], [44]]
-        
+
     def _extract_state(self, state):
         ''' Encode state
 
         Args:
             state (dict): dict of original state
         '''
-        
+
         # encode cards on different sections
         board_public = _cards2array(state['board_public'])
         cur_public = _cards2array(state['cur_public'])
         cur_private = _cards2array(state['cur_private'])
         oppo_public = _cards2array(state['oppo_public'])
         cur_hand = _cards2array(state['cur_hand'])
-        
-        # encode empty space
-        cur_public_space = one_hot(3 - len(state['cur_public']), 4)
-        cur_private_space = one_hot(3 - len(state['cur_private']), 4)
-        oppo_public_space = one_hot(3 - len(state['oppo_public']), 4)
-        oppo_private_space = one_hot(3 - state['oppo_private_count'], 4)
-        
-        # encode score table
-        cur_table, cur_joker = _cards2table(state['board_public'] + state['cur_public'] + state['oppo_public'] + state['cur_private'])
-        oppo_table, oppo_joker = _cards2table(state['board_public'] + state['cur_public'] + state['oppo_public'])
-       
-        cur_joker_count = one_hot(cur_joker.sum(), 3)
-        cur_suit_count = np.zeros(4 * 6)
-        for i in range(4):  # four different suits
-            cur_suit_count[i*6: (i+1)*6] = one_hot(cur_table[:, i].sum(), 6)
-        cur_color_count = np.zeros(5 * 5)
-        for i in range(5):  # five different colors
-            cur_color_count[i*5: (i+1)*5] = one_hot(cur_table[i, :].sum(), 5)
-            
-        oppo_joker_count = one_hot(oppo_joker.sum(), 3)
-        oppo_suit_count = np.zeros(4 * 6)
-        for i in range(4):  # four different suits
-            oppo_suit_count[i*6: (i+1)*6] = one_hot(oppo_table[:, i].sum(), 6)
-        oppo_color_count = np.zeros(5 * 5)
-        for i in range(5):  # five different colors
-            oppo_color_count[i*5: (i+1)*5] = one_hot(oppo_table[i, :].sum(), 5)
-            
-        if self.obs_mode == 'legacy':
-            obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
-                                  cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
-                                  cur_joker_count, cur_suit_count, cur_color_count,
-                                  oppo_joker_count, oppo_suit_count, oppo_color_count))
-        elif self.obs_mode == 'v2':
-            seen_cards = np.clip(board_public + cur_public + cur_private + oppo_public + cur_hand, 0.0, 1.0)
-            unseen_cards = 1.0 - seen_cards
-            cur_turn = np.zeros(12)
-            turn_idx = int(state.get('cur_turn', -1))
-            if 0 <= turn_idx < 12:
-                cur_turn[turn_idx] = 1.0
-            obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
-                                  cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
-                                  cur_joker_count, cur_suit_count, cur_color_count,
-                                  oppo_joker_count, oppo_suit_count, oppo_color_count,
-                                  unseen_cards, cur_turn))
-        else:
-            seen_cards = np.clip(board_public + cur_public + cur_private + oppo_public + cur_hand, 0.0, 1.0)
-            unseen_cards = 1.0 - seen_cards
 
-            oppo_pub_by_step = np.zeros(6 * 22, dtype=np.float32)
-            oppo_step_priv = np.zeros(6, dtype=np.float32)
-            oppo_step_pub = np.zeros(6, dtype=np.float32)
+        if self.obs_mode == 'v4':
+            obs = np.zeros(OBS_V4_DIM, dtype=np.float32)
+            obs[0:22] = board_public
+            obs[22:44] = cur_public
+            obs[44:66] = cur_private
+            obs[66:88] = oppo_public
+            obs[88:110] = cur_hand
+            seen_cards = np.clip(board_public + cur_public + cur_private + oppo_public + cur_hand, 0.0, 1.0)
+            obs[110:132] = 1.0 - seen_cards
+
             for k, (card, _, sec) in enumerate(state.get('oppo_history', [])[:6]):
                 if sec == 0:
-                    oppo_step_priv[k] = 1.0
+                    obs[264 + k] = 1.0
                 else:
-                    oppo_step_pub[k] = 1.0
-                    if card in CARD_TO_IDX:
-                        oppo_pub_by_step[k * 22 + CARD_TO_IDX[card]] = 1.0
+                    obs[270 + k] = 1.0
+                    idx = CARD_TO_IDX.get(card)
+                    if idx is not None:
+                        obs[132 + k * 22 + idx] = 1.0
 
-            cur_step_priv = np.zeros(6, dtype=np.float32)
-            cur_step_pub = np.zeros(6, dtype=np.float32)
             for k, (_, _, sec) in enumerate(state.get('cur_history', [])[:6]):
                 if sec == 0:
-                    cur_step_priv[k] = 1.0
+                    obs[276 + k] = 1.0
                 else:
-                    cur_step_pub[k] = 1.0
+                    obs[282 + k] = 1.0
 
-            cur_turn = np.zeros(12, dtype=np.float32)
+            obs[288:292] = _SPACE_OH[3 - len(state['cur_public'])]
+            obs[292:296] = _SPACE_OH[3 - len(state['cur_private'])]
+            obs[296:300] = _SPACE_OH[3 - len(state['oppo_public'])]
+            obs[300:304] = _SPACE_OH[3 - state['oppo_private_count']]
             turn_idx = int(state.get('cur_turn', -1))
             if 0 <= turn_idx < 12:
-                cur_turn[turn_idx] = 1.0
-            player_oh = one_hot(int(state.get('player_id', 0)), 2)
+                obs[304 + turn_idx] = 1.0
+            obs[316 + int(state.get('player_id', 0))] = 1.0
+        else:
+            # encode empty space
+            cur_public_space = one_hot(3 - len(state['cur_public']), 4)
+            cur_private_space = one_hot(3 - len(state['cur_private']), 4)
+            oppo_public_space = one_hot(3 - len(state['oppo_public']), 4)
+            oppo_private_space = one_hot(3 - state['oppo_private_count'], 4)
 
-            obs = np.concatenate((
-                board_public, cur_public, cur_private, oppo_public, cur_hand, unseen_cards,
-                oppo_pub_by_step,
-                oppo_step_priv, oppo_step_pub,
-                cur_step_priv, cur_step_pub,
-                cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
-                cur_turn, player_oh,
-            ))
-        
+            # encode score table
+            oppo_arr = np.clip(board_public + cur_public + oppo_public, 0.0, 1.0)
+            cur_arr = np.clip(oppo_arr + cur_private, 0.0, 1.0)
+            cur_table, cur_joker = cur_arr[:20].reshape((5, 4)), cur_arr[20:]
+            oppo_table, oppo_joker = oppo_arr[:20].reshape((5, 4)), oppo_arr[20:]
+
+            cur_joker_count = one_hot(cur_joker.sum(), 3)
+            cur_suit_count = np.zeros(4 * 6)
+            for i in range(4):  # four different suits
+                cur_suit_count[i*6: (i+1)*6] = one_hot(cur_table[:, i].sum(), 6)
+            cur_color_count = np.zeros(5 * 5)
+            for i in range(5):  # five different colors
+                cur_color_count[i*5: (i+1)*5] = one_hot(cur_table[i, :].sum(), 5)
+
+            oppo_joker_count = one_hot(oppo_joker.sum(), 3)
+            oppo_suit_count = np.zeros(4 * 6)
+            for i in range(4):  # four different suits
+                oppo_suit_count[i*6: (i+1)*6] = one_hot(oppo_table[:, i].sum(), 6)
+            oppo_color_count = np.zeros(5 * 5)
+            for i in range(5):  # five different colors
+                oppo_color_count[i*5: (i+1)*5] = one_hot(oppo_table[i, :].sum(), 5)
+
+            if self.obs_mode == 'legacy':
+                obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
+                                      cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
+                                      cur_joker_count, cur_suit_count, cur_color_count,
+                                      oppo_joker_count, oppo_suit_count, oppo_color_count))
+            else:
+                seen_cards = np.clip(board_public + cur_public + cur_private + oppo_public + cur_hand, 0.0, 1.0)
+                unseen_cards = 1.0 - seen_cards
+                cur_turn = np.zeros(12)
+                turn_idx = int(state.get('cur_turn', -1))
+                if 0 <= turn_idx < 12:
+                    cur_turn[turn_idx] = 1.0
+                obs = np.concatenate((board_public, cur_public, cur_private, oppo_public, cur_hand,
+                                      cur_public_space, cur_private_space, oppo_public_space, oppo_private_space,
+                                      cur_joker_count, cur_suit_count, cur_color_count,
+                                      oppo_joker_count, oppo_suit_count, oppo_color_count,
+                                      unseen_cards, cur_turn))
+
         # encode legal actions
         raw_legal_actions = self._get_legal_actions(state)
-        legal_actions = {ACTION_2_ID[x]: one_hot(ACTION_2_ID[x], len(ID_2_ACTION)) for x in raw_legal_actions}
+        legal_actions = {ACTION_2_ID[x]: _ACTION_OH[ACTION_2_ID[x]] for x in raw_legal_actions}
 
         extracted_state = OrderedDict({'obs': obs, 'legal_actions': legal_actions})
         extracted_state['raw_obs'] = state
@@ -187,5 +187,5 @@ class SwyBlmEnv(Env):
         Returns:
             (numpy.array): The action features
         '''
-        return one_hot(action, len(ID_2_ACTION))
+        return _ACTION_OH[int(action)].copy()
         
