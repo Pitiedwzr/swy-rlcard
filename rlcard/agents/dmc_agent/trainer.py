@@ -38,6 +38,7 @@ from .utils import (
     create_schedulers,
     act,
     log,
+    validate,
 )
 from .pettingzoo_utils import (
     create_buffers_pettingzoo,
@@ -46,7 +47,6 @@ from .pettingzoo_utils import (
 
 from rlcard.agents.random_agent import RandomAgent
 from rlcard.agents.rule_based_agent import RuleBasedAgent
-from evaluate import validate
 
 def compute_loss(logits, targets, loss_type='mse', loss_beta=2.0):
     if loss_type == 'smooth_l1':

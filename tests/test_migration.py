@@ -337,3 +337,22 @@ def test_equivariant_dmc_train_resume_and_evaluate_cli_smoke(tmp_path):
         )
         assert proc_eval.returncode == 0, proc_eval.stderr
         assert 'first_avg_score' in proc_eval.stdout
+
+
+def test_cli_entrypoints_no_circular_import():
+    proc_import = subprocess.run(
+        [sys.executable, '-c', 'from evaluate import load_dmc_agents, validate'],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc_import.returncode == 0, proc_import.stderr
+
+    for script in ('evaluate.py', 'assist.py', 'evaluate_human.py'):
+        proc_help = subprocess.run(
+            [sys.executable, script, '--help'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc_help.returncode == 0, proc_help.stderr

@@ -9,6 +9,7 @@ import torch
 import rlcard
 from rlcard.agents.dmc_agent.equivariant_model import EquivariantDMCAgent
 from rlcard.agents.dmc_agent.model import DMCAgent
+from rlcard.agents.dmc_agent.utils import validate
 from rlcard.agents.dmc_search_agent import DMCSearchAgent
 from rlcard.agents.random_agent import RandomAgent
 from rlcard.agents.rule_based_agent import RuleBasedAgent
@@ -65,37 +66,6 @@ def load_dmc_agents(model_path, device="cpu", sym_avg_k=1):
             base_agents.append(agent)
 
     return env, base_agents, ckpt_states
-
-
-@torch.no_grad()
-def validate(env, agents, baseline_agent, M=1000):
-    res = {}
-
-    # test first hand agent
-    env.set_agents([agents[0], baseline_agent])
-    first_score = np.zeros((M, 2))
-    for i in range(M):
-        env.run(is_training=False)
-        first_score[i] = env.game.final_score
-    
-    res['first_avg_score'] = float(first_score[:, 0].mean())
-    res['first_avg_winning_score'] = float((first_score[:, 0] - first_score[:, 1]).mean())
-    res['first_avg_winning_rate'] = float((first_score[:, 0] > first_score[:, 1]).mean())
-    res['first_avg_losing_rate'] = float((first_score[:, 0] < first_score[:, 1]).mean())
-
-    # test second hand agent
-    env.set_agents([baseline_agent, agents[1]])
-    second_score = np.zeros((M, 2))
-    for i in range(M):
-        env.run(is_training=False)
-        second_score[i] = env.game.final_score
-
-    res['second_avg_score'] = float(second_score[:, 1].mean())
-    res['second_avg_winning_score'] = float((second_score[:, 1] - second_score[:, 0]).mean())
-    res['second_avg_winning_rate'] = float((second_score[:, 1] > second_score[:, 0]).mean())
-    res['second_avg_losing_rate'] = float((second_score[:, 1] < second_score[:, 0]).mean())
-    
-    return res
 
 
 if __name__ == '__main__':
